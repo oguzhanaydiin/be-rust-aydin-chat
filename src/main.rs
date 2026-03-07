@@ -3,6 +3,8 @@ mod db;
 
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use dotenv::dotenv;
+use serde::Deserialize;
+use rand::Rng;
 use db::MongoRepo;
 use models::{Message, CreateMessageDTO, Conversation, LastMessagePreview};
 use mongodb::bson::{doc, oid::ObjectId, DateTime};
@@ -10,6 +12,13 @@ use futures::stream::TryStreamExt;
 use mongodb::Cursor;
 use models::{OtpResponse, VerifyRequest, VerifyResponse};
 use models::UserOtpSecret;
+use models::{
+    EmailOtpRecord,
+    SendEmailOtpRequest,
+    SendEmailOtpResponse,
+    ValidateEmailOtpRequest,
+};
+use std::time::{Duration as StdDuration, SystemTime};
 
 #[derive(Deserialize)]
 struct SetOtpRequest {
@@ -18,7 +27,7 @@ struct SetOtpRequest {
 
 async fn set_user_otp_secret(data: web::Data<AppState>, req: web::Json<SetOtpRequest>) -> impl Responder {
     let user_id = &req.user_id;
-    let secret = Secret::generate_secret();
+    let secret = Secret::Raw(generate_totp_secret_bytes());
     let secret_str = secret.to_encoded().to_string();
 
     let otp_secret = UserOtpSecret {
@@ -29,7 +38,7 @@ async fn set_user_otp_secret(data: web::Data<AppState>, req: web::Json<SetOtpReq
 
     let col = data.db.collection::<UserOtpSecret>("user_otp_secrets");
     match col.insert_one(otp_secret, None).await {
-        Ok(_) => HttpResponse::Ok().json(OtpResponse { secret: secret_str, otp: create_totp(&secret_str).unwrap().generate_current().unwrap_or_default() }),
+        Ok(_) => HttpResponse::Ok().json(OtpResponse { secret: secret_str.clone(), otp: create_totp(&secret_str).unwrap().generate_current().unwrap_or_default() }),
         Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
     }
 }
@@ -45,7 +54,7 @@ async fn verify_user_otp(data: web::Data<AppState>, req: web::Json<VerifyUserOtp
     let col = data.db.collection::<UserOtpSecret>("user_otp_secrets");
     let filter = doc! { "user_id": &req.user_id };
     match col.find_one(filter, None).await {
-        Some(Ok(user_secret)) => {
+        Ok(Some(user_secret)) => {
             let totp = match create_totp(&user_secret.secret) {
                 Ok(t) => t,
                 Err(_) => return HttpResponse::BadRequest().json(VerifyResponse { valid: false }),
@@ -58,6 +67,13 @@ async fn verify_user_otp(data: web::Data<AppState>, req: web::Json<VerifyUserOtp
 }
 use totp_rs::{Algorithm, TOTP, Secret};
 
+fn generate_totp_secret_bytes() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    let mut bytes = vec![0_u8; 20];
+    rng.fill(bytes.as_mut_slice());
+    bytes
+}
+
 fn create_totp(secret_str: &str) -> Result<TOTP, String> {
     let secret_bytes = Secret::Encoded(secret_str.to_string())
         .to_bytes()
@@ -69,15 +85,105 @@ fn create_totp(secret_str: &str) -> Result<TOTP, String> {
         1,
         30,
         secret_bytes,
-        None,
-        "".to_string(),
     )
     .map_err(|e| e.to_string())
 }
 
+fn generate_6_digit_otp() -> String {
+    let mut rng = rand::thread_rng();
+    let value: u32 = rng.gen_range(0..=999_999);
+    format!("{value:06}")
+}
+
+async fn send_email_otp(
+    data: web::Data<AppState>,
+    req: web::Json<SendEmailOtpRequest>,
+) -> impl Responder {
+    let email = req.email.trim().to_lowercase();
+    if email.is_empty() {
+        return HttpResponse::BadRequest().body("email bos olamaz");
+    }
+
+    let otp = generate_6_digit_otp();
+    let ttl_seconds: i64 = 300;
+    let now = DateTime::now();
+    let expires_at = DateTime::from_system_time(
+        SystemTime::now() + StdDuration::from_secs(ttl_seconds as u64)
+    );
+
+    let otp_col = data.db.collection::<EmailOtpRecord>("email_otps");
+
+    if let Err(e) = otp_col
+        .delete_many(doc! { "expires_at": { "$lte": DateTime::now() } }, None)
+        .await
+    {
+        return HttpResponse::InternalServerError().json(e.to_string());
+    }
+
+    let filter = doc! { "email": &email };
+    let update = doc! {
+        "$set": {
+            "email": &email,
+            "otp": &otp,
+            "expires_at": expires_at,
+            "created_at": now,
+            "is_used": false,
+        }
+    };
+
+    match otp_col.update_one(
+        filter,
+        update,
+        mongodb::options::UpdateOptions::builder().upsert(true).build(),
+    ).await {
+        Ok(_) => {
+            // TODO: Send OTP to email provider here. Returning code for local/dev testing.
+            HttpResponse::Ok().json(SendEmailOtpResponse {
+                message: "OTP created and stored".to_string(),
+                otp,
+                expires_in_seconds: ttl_seconds,
+            })
+        }
+        Err(e) => HttpResponse::InternalServerError().json(e.to_string()),
+    }
+}
+
+async fn validate_email_otp(
+    data: web::Data<AppState>,
+    req: web::Json<ValidateEmailOtpRequest>,
+) -> impl Responder {
+    let email = req.email.trim().to_lowercase();
+    if email.is_empty() {
+        return HttpResponse::BadRequest().body("email bos olamaz");
+    }
+
+    let otp_col = data.db.collection::<EmailOtpRecord>("email_otps");
+    let filter = doc! { "email": &email };
+
+    let otp_record = match otp_col.find_one(filter.clone(), None).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return HttpResponse::Ok().json(VerifyResponse { valid: false }),
+        Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
+    };
+
+    let is_not_expired = otp_record.expires_at > DateTime::now();
+    let is_code_match = otp_record.otp == req.otp;
+    let is_valid = !otp_record.is_used && is_not_expired && is_code_match;
+
+    if is_valid {
+        let _ = otp_col.update_one(
+            filter,
+            doc! { "$set": { "is_used": true } },
+            None,
+        ).await;
+    }
+
+    HttpResponse::Ok().json(VerifyResponse { valid: is_valid })
+}
+
 // OTP Endpoints
 async fn generate_otp() -> impl Responder {
-    let secret = Secret::generate_secret();
+    let secret = Secret::Raw(generate_totp_secret_bytes());
     let secret_str = secret.to_encoded().to_string();
 
     match create_totp(&secret_str) {
@@ -222,6 +328,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(AppState { db: db_instance.clone() }))
             .route("/messages", web::post().to(send_message))
             .route("/conversations/{id}/messages", web::get().to(get_history))
+            .route("/otp/send", web::post().to(send_email_otp))
+            .route("/otp/validate", web::post().to(validate_email_otp))
             .route("/otp/set", web::post().to(set_user_otp_secret))
             .route("/otp/verify-user", web::post().to(verify_user_otp))
             .route("/otp/generate", web::get().to(generate_otp))
