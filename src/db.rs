@@ -34,6 +34,13 @@ impl MongoRepo {
             .build();
             
         let _ = conversations_col.create_index(conv_index, None::<CreateIndexOptions>).await;
+
+        let email_otps_col = self.db.collection::<Document>("email_otps");
+        let otp_index = IndexModel::builder()
+            .keys(doc! { "email": 1 })
+            .build();
+
+        let _ = email_otps_col.create_index(otp_index, None::<CreateIndexOptions>).await;
         
         println!("MongoDB indexes checked.");
     }

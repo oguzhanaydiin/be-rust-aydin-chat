@@ -1,4 +1,5 @@
-use mongodb::bson::oid::ObjectId;
+use mongodb::bson::{oid::ObjectId, DateTime};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserOtpSecret {
@@ -7,8 +8,6 @@ pub struct UserOtpSecret {
     pub user_id: String,
     pub secret: String,
 }
-// OTP Models
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct OtpResponse {
@@ -26,9 +25,36 @@ pub struct VerifyRequest {
 pub struct VerifyResponse {
     pub valid: bool,
 }
-use serde::{Deserialize, Serialize};
-use mongodb::bson::oid::ObjectId;
-use mongodb::bson::DateTime;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmailOtpRecord {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub email: String,
+    pub otp: String,
+    pub expires_at: DateTime,
+    pub created_at: DateTime,
+    #[serde(default)]
+    pub is_used: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendEmailOtpRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ValidateEmailOtpRequest {
+    pub email: String,
+    pub otp: String,
+}
+
+#[derive(Serialize)]
+pub struct SendEmailOtpResponse {
+    pub message: String,
+    pub otp: String,
+    pub expires_in_seconds: i64,
+}
 
 // Manages data coming from and going to MongoDB
 #[derive(Debug, Serialize, Deserialize)]
