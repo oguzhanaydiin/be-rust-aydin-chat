@@ -1,4 +1,4 @@
-use mongodb::{Client, options::ClientOptions, options::CreateIndexOptions, IndexModel, Database};
+use mongodb::{options::ClientOptions, options::CreateIndexOptions, Client, Database, IndexModel};
 use mongodb::bson::{doc, Document}; 
 use std::env;
 
@@ -19,22 +19,6 @@ impl MongoRepo {
     }
 
     async fn create_indexes(&self) {
-        let messages_col = self.db.collection::<Document>("messages");
-        
-        let index_model = IndexModel::builder()
-            .keys(doc! { "conversation_id": 1, "created_at": -1 })
-            .build();
-            
-        // Explicitly specifying the type to eliminate error margin
-        let _ = messages_col.create_index(index_model, None::<CreateIndexOptions>).await;
-
-        let conversations_col = self.db.collection::<Document>("conversations");
-        let conv_index = IndexModel::builder()
-            .keys(doc! { "members": 1 })
-            .build();
-            
-        let _ = conversations_col.create_index(conv_index, None::<CreateIndexOptions>).await;
-
         let email_otps_col = self.db.collection::<Document>("email_otps");
         let otp_index = IndexModel::builder()
             .keys(doc! { "email": 1 })
