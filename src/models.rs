@@ -101,6 +101,10 @@ pub enum WsServerEvent {
         message_id: String,
         client_message_id: Option<String>,
     },
+    MessageDelivered {
+        message_id: String,
+        client_message_id: Option<String>,
+    },
     NewMessage { message: PendingMessage },
     AckResult { removed_count: usize },
     Error { message: String },
