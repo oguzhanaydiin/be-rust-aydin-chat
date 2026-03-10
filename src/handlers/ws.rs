@@ -74,6 +74,17 @@ impl ChatWsSession {
             }
 
             let inbox = state.get_inbox(&normalized).await;
+
+            // Notify senders of queued messages that their message is now delivered
+            for msg in &inbox {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageDelivered {
+                    message_id: msg.id.clone(),
+                    client_message_id: None,
+                }) {
+                    let _ = state.dispatch_to_user(&msg.from_user_id, &payload).await;
+                }
+            }
+
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::Inbox { messages: inbox }) {
                 let _ = tx.send(payload);
             }
@@ -118,17 +129,28 @@ impl ChatWsSession {
 
             state.queue_message(message.clone()).await;
 
-            if let Ok(payload) = serde_json::to_string(&WsServerEvent::NewMessage {
+            let delivered = if let Ok(payload) = serde_json::to_string(&WsServerEvent::NewMessage {
                 message: message.clone(),
             }) {
-                let _ = state.dispatch_to_user(&normalized_to, &payload).await;
-            }
+                state.dispatch_to_user(&normalized_to, &payload).await
+            } else {
+                0
+            };
 
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageQueued {
-                message_id: message.id,
-                client_message_id,
+                message_id: message.id.clone(),
+                client_message_id: client_message_id.clone(),
             }) {
                 let _ = tx.send(payload);
+            }
+
+            if delivered > 0 {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageDelivered {
+                    message_id: message.id,
+                    client_message_id,
+                }) {
+                    let _ = tx.send(payload);
+                }
             }
         });
     }
