@@ -36,7 +36,8 @@ pub struct ValidateEmailOtpRequest {
 #[derive(Serialize)]
 pub struct SendEmailOtpResponse {
     pub message: String,
-    pub otp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otp: Option<String>,
     pub expires_in_seconds: i64,
 }
 
