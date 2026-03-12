@@ -11,6 +11,7 @@ use dotenv::dotenv;
 use db::MongoRepo;
 use app_state::AppState;
 use std::env;
+use std::io::{Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
@@ -21,7 +22,7 @@ async fn main() -> std::io::Result<()> {
     let mongo_repo = MongoRepo::init().await;
     let db_instance = mongo_repo.get_db().clone();
     let jwt_secret = env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "dev_insecure_secret_change_me".to_string());
+        .map_err(|_| IoError::new(ErrorKind::InvalidInput, "JWT_SECRET is missing"))?;
     let app_state = web::Data::new(AppState {
         db: db_instance,
         jwt_secret,

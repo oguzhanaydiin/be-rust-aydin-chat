@@ -123,3 +123,4 @@ WebSocket route:
 - Chat messages are not persisted in MongoDB.
 - Offline chat queue is currently in-memory (lost on server restart).
 - For stronger delivery guarantees, consider Redis for temporary undelivered messages.
+- OTP is returned in `POST /otp/send` response only when `APP_ENV` is set to `dev`, `development`, or `local`.
