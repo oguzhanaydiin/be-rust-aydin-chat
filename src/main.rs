@@ -1,15 +1,7 @@
-mod models;
-mod db;
-mod app_state;
-mod auth;
-mod handlers;
-mod routes;
-
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
+use chat_api::{app_state::AppState, db::MongoRepo, routes};
 use dotenv::dotenv;
-use db::MongoRepo;
-use app_state::AppState;
 use std::env;
 use std::io::{Error as IoError, ErrorKind};
 use std::collections::HashMap;
