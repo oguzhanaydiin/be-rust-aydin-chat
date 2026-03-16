@@ -20,8 +20,9 @@ src/
 	routes.rs
 	handlers/
 		mod.rs
-		chat.rs
+		health.rs
 		otp.rs
+		users.rs
 		ws.rs
 ```
 
@@ -51,28 +52,29 @@ File responsibilities:
 
 - `src/models.rs`
 	- Request/response DTOs and shared models.
-	- OTP models (`SendEmailOtpRequest`, `ValidateEmailOtpRequest`, etc.).
-	- Chat models (`PendingMessage`, `CreateMessageDTO`, ack DTOs).
+	- OTP models (`SendEmailOtpRequest`, `ValidateEmailOtpRequest`, `AuthSessionResponse`, etc.).
+	- User models (`User`, `SaveUsernameRequest`, `SaveUsernameResponse`).
+	- Chat models (`PendingMessage` - used internally by WebSocket handlers).
 	- WebSocket event enums (`WsClientEvent`, `WsServerEvent`).
 
 - `src/routes.rs`
-	- Central route map for HTTP + WebSocket endpoints.
+	- Central route map for HTTP and WebSocket endpoints.
 
-- `src/handlers/chat.rs`
-	- HTTP chat handlers:
-		- send message
-		- get inbox
-		- ack messages
-		- list online users
-	- Uses shared in-memory state, no MongoDB message storage.
+- `src/handlers/health.rs`
+	- Health check endpoint.
 
 - `src/handlers/otp.rs`
 	- OTP generation, storage, validation.
 	- Uses MongoDB collection `email_otps`.
 
+- `src/handlers/users.rs`
+	- User profile management (username).
+	- Uses MongoDB collection `users`.
+
 - `src/handlers/ws.rs`
 	- WebSocket session lifecycle and event handling.
 	- Handles register/send_message/ack/get_online_users events.
+	- Manages in-memory message queue for offline delivery.
 	- Delivers realtime messages and pushes inbox/online updates.
 
 - `src/handlers/mod.rs`
@@ -82,29 +84,27 @@ File responsibilities:
 
 HTTP routes:
 
-- `POST /messages`
-	- Queue a message for recipient.
-	- If recipient is online, also pushes realtime socket event.
+- `GET /health`
+	- Health check endpoint.
 
-- `GET /messages/inbox/{user_id}`
-	- Returns pending (not acked) messages for user.
-
-- `POST /messages/ack`
-	- Removes acked messages from pending mailbox.
-
-- `GET /users/online`
-	- Returns currently online user IDs.
+- `PUT /users/username`
+	- Save/update username for authenticated user.
+	- Requires Bearer token in Authorization header.
+	- Validates username uniqueness.
 
 - `POST /otp/send`
 	- Creates OTP and stores it in MongoDB.
+	- Returns OTP in dev environment for testing.
 
 - `POST /otp/validate`
-	- Validates OTP and marks it used.
+	- Validates OTP and returns authentication token.
+	- Returns user profile including username if set.
 
 WebSocket route:
 
 - `GET /ws`
 	- WebSocket endpoint for realtime chat events.
+	- Handles: register, send_message, ack, get_online_users events.
 
 ## Dependencies (Cargo.toml)
 
