@@ -8,6 +8,8 @@ pub struct AuthSessionResponse {
     pub token: Option<String>,
     pub user_id: Option<String>,
     pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,12 +43,28 @@ pub struct SendEmailOtpResponse {
     pub expires_in_seconds: i64,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateMessageDTO {
-    pub from_user_id: String,
-    pub to_user_id: String,
-    pub text: String,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct User {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub created_at: BsonDateTime,
+    pub updated_at: BsonDateTime,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct SaveUsernameRequest {
+    pub username: String,
+}
+
+#[derive(Serialize)]
+pub struct SaveUsernameResponse {
+    pub username: String,
+}
+
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PendingMessage {
@@ -57,27 +75,7 @@ pub struct PendingMessage {
     pub created_at: ChronoDateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SendMessageResponse {
-    pub message: String,
-    pub queued_message_id: String,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct AckMessagesRequest {
-    pub user_id: String,
-    pub message_ids: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AckMessagesResponse {
-    pub removed_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OnlineUsersResponse {
-    pub users: Vec<String>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

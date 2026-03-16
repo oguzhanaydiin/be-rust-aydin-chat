@@ -25,6 +25,14 @@ impl MongoRepo {
             .build();
 
         let _ = email_otps_col.create_index(otp_index, None::<CreateIndexOptions>).await;
+
+        let users_col = self.db.collection::<Document>("users");
+        let user_email_index = IndexModel::builder()
+            .keys(doc! { "email": 1 })
+            .build();
+
+        let _ = users_col.create_index(user_email_index, None::<CreateIndexOptions>).await;
+
         
         println!("MongoDB indexes checked.");
     }
