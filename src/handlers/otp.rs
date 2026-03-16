@@ -9,7 +9,7 @@ use crate::app_state::AppState;
 use crate::auth::issue_token;
 use crate::models::{
     AuthSessionResponse, EmailOtpRecord, SendEmailOtpRequest, SendEmailOtpResponse,
-    ValidateEmailOtpRequest,
+    ValidateEmailOtpRequest, User,
 };
 
 fn generate_6_digit_otp() -> String {
@@ -159,6 +159,7 @@ pub async fn validate_email_otp(
                 token: None,
                 user_id: None,
                 email: None,
+                username: None,
             })
         }
         Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
@@ -178,11 +179,18 @@ pub async fn validate_email_otp(
             Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
         };
 
+        // Fetch user's username if it exists
+        let users_col = data.db.collection::<User>("users");
+        let user_filter = doc! { "email": &email };
+        let user = users_col.find_one(user_filter, None).await.ok().flatten();
+        let username = user.and_then(|u| u.username);
+
         return HttpResponse::Ok().json(AuthSessionResponse {
             valid: true,
             token: Some(token),
             user_id: Some(email.clone()),
             email: Some(email),
+            username,
         });
     }
 
@@ -191,5 +199,6 @@ pub async fn validate_email_otp(
         token: None,
         user_id: None,
         email: None,
+        username: None,
     })
 }
