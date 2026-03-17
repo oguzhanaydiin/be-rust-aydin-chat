@@ -7,6 +7,7 @@ pub struct AuthSessionResponse {
     pub valid: bool,
     pub token: Option<String>,
     pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -69,8 +70,8 @@ pub struct SaveUsernameResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PendingMessage {
     pub id: String,
-    pub from_user_id: String,
-    pub to_user_id: String,
+    pub from_username: String,
+    pub to_username: String,
     pub text: String,
     pub created_at: ChronoDateTime<Utc>,
 }
@@ -82,7 +83,8 @@ pub struct PendingMessage {
 pub enum WsClientEvent {
     Register { token: String },
     SendMessage {
-        to_user_id: String,
+        #[serde(alias = "to_user_id")]
+        to_username: String,
         text: String,
         client_message_id: Option<String>,
     },
@@ -93,7 +95,7 @@ pub enum WsClientEvent {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerEvent {
-    Registered { user_id: String },
+    Registered { username: String },
     OnlineUsers { users: Vec<String> },
     Inbox { messages: Vec<PendingMessage> },
     MessageQueued {

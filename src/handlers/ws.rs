@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use actix::{Actor, ActorContext, AsyncContext, StreamHandler};
+use actix::{Actor, ActorContext, ActorFutureExt, AsyncContext, StreamHandler, WrapFuture};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use chrono::Utc;
@@ -9,7 +9,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::app_state::AppState;
 use crate::auth::verify_token;
-use crate::models::{PendingMessage, WsClientEvent, WsServerEvent};
+use crate::models::{PendingMessage, User, WsClientEvent, WsServerEvent};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -23,7 +23,7 @@ pub async fn ws_index(
     let session = ChatWsSession {
         state: data,
         connection_id: generate_id(),
-        user_id: None,
+        username: None,
         out_tx: tx,
         out_rx: Some(rx),
         hb: Instant::now(),
@@ -35,13 +35,35 @@ pub async fn ws_index(
 struct ChatWsSession {
     state: web::Data<AppState>,
     connection_id: String,
-    user_id: Option<String>,
+    username: Option<String>,
     out_tx: UnboundedSender<String>,
     out_rx: Option<UnboundedReceiver<String>>,
     hb: Instant,
 }
 
 impl ChatWsSession {
+    async fn resolve_username_by_email(
+        state: web::Data<AppState>,
+        email: String,
+    ) -> Result<String, String> {
+        let users_col = state.db.collection::<User>("users");
+        let found_user = users_col
+            .find_one(mongodb::bson::doc! { "email": &email }, None)
+            .await
+            .map_err(|_| "failed to fetch user".to_string())?;
+
+        let username = found_user
+            .and_then(|u| u.username)
+            .ok_or_else(|| "username not found for this account".to_string())?;
+
+        let normalized = username.trim().to_lowercase();
+        if normalized.is_empty() {
+            return Err("username is invalid for this account".to_string());
+        }
+
+        Ok(normalized)
+    }
+
     fn send_error(ctx: &mut ws::WebsocketContext<Self>, message: &str) {
         if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
             message: message.to_string(),
@@ -50,13 +72,13 @@ impl ChatWsSession {
         }
     }
 
-    fn handle_register(&mut self, user_id: String) {
-        let normalized = user_id.trim().to_lowercase();
+    fn handle_register(&mut self, username: String) {
+        let normalized = username.trim().to_lowercase();
         if normalized.is_empty() {
             return;
         }
 
-        self.user_id = Some(normalized.clone());
+        self.username = Some(normalized.clone());
 
         let state = self.state.clone();
         let tx = self.out_tx.clone();
@@ -68,7 +90,7 @@ impl ChatWsSession {
                 .await;
 
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::Registered {
-                user_id: normalized.clone(),
+                username: normalized.clone(),
             }) {
                 let _ = tx.send(payload);
             }
@@ -81,7 +103,7 @@ impl ChatWsSession {
                     message_id: msg.id.clone(),
                     client_message_id: None,
                 }) {
-                    let _ = state.dispatch_to_user(&msg.from_user_id, &payload).await;
+                    let _ = state.dispatch_to_user(&msg.from_username, &payload).await;
                 }
             }
 
@@ -100,15 +122,15 @@ impl ChatWsSession {
 
     fn handle_send_message(
         &self,
-        to_user_id: String,
+        to_username: String,
         text: String,
         client_message_id: Option<String>,
     ) {
-        let Some(from_user_id) = self.user_id.clone() else {
+        let Some(from_username) = self.username.clone() else {
             return;
         };
 
-        let normalized_to = to_user_id.trim().to_string();
+        let normalized_to = to_username.trim().to_lowercase();
         let normalized_text = text.trim().to_string();
 
         if normalized_to.is_empty() || normalized_text.is_empty() {
@@ -121,8 +143,8 @@ impl ChatWsSession {
         tokio::spawn(async move {
             let message = PendingMessage {
                 id: generate_id(),
-                from_user_id,
-                to_user_id: normalized_to.clone(),
+                from_username,
+                to_username: normalized_to.clone(),
                 text: normalized_text,
                 created_at: Utc::now(),
             };
@@ -156,7 +178,7 @@ impl ChatWsSession {
     }
 
     fn handle_ack(&self, message_ids: Vec<String>) {
-        let Some(user_id) = self.user_id.clone() else {
+        let Some(username) = self.username.clone() else {
             return;
         };
 
@@ -164,7 +186,7 @@ impl ChatWsSession {
         let tx = self.out_tx.clone();
 
         tokio::spawn(async move {
-            let removed_count = state.ack_messages(&user_id, &message_ids).await;
+            let removed_count = state.ack_messages(&username, &message_ids).await;
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::AckResult { removed_count }) {
                 let _ = tx.send(payload);
             }
@@ -192,7 +214,7 @@ impl Actor for ChatWsSession {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        let Some(user_id) = self.user_id.clone() else {
+        let Some(username) = self.username.clone() else {
             return;
         };
 
@@ -200,7 +222,7 @@ impl Actor for ChatWsSession {
         let connection_id = self.connection_id.clone();
 
         tokio::spawn(async move {
-            state.unregister_connection(&user_id, &connection_id).await;
+            state.unregister_connection(&username, &connection_id).await;
             let online_users = state.online_user_ids().await;
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::OnlineUsers {
                 users: online_users,
@@ -238,29 +260,45 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                         }
 
                         match verify_token(&self.state.jwt_secret, token) {
-                            Ok(claims) => self.handle_register(claims.sub),
+                            Ok(claims) => {
+                                let email = claims.email.trim().to_lowercase();
+                                if email.is_empty() {
+                                    Self::send_error(ctx, "invalid token claims");
+                                    return;
+                                }
+
+                                let state = self.state.clone();
+                                let register_future = Self::resolve_username_by_email(state, email)
+                                    .into_actor(self)
+                                    .map(|result, act, ctx| match result {
+                                        Ok(username) => act.handle_register(username),
+                                        Err(message) => Self::send_error(ctx, &message),
+                                    });
+
+                                ctx.spawn(register_future);
+                            }
                             Err(_) => Self::send_error(ctx, "invalid token"),
                         }
                     }
                     Ok(WsClientEvent::SendMessage {
-                        to_user_id,
+                        to_username,
                         text,
                         client_message_id,
                     }) => {
-                        if self.user_id.is_none() {
+                        if self.username.is_none() {
                             Self::send_error(ctx, "send register event first");
                             return;
                         }
 
-                        if to_user_id.trim().is_empty() || text.trim().is_empty() {
-                            Self::send_error(ctx, "to_user_id and text cannot be empty");
+                        if to_username.trim().is_empty() || text.trim().is_empty() {
+                            Self::send_error(ctx, "to_username and text cannot be empty");
                             return;
                         }
 
-                        self.handle_send_message(to_user_id, text, client_message_id);
+                        self.handle_send_message(to_username, text, client_message_id);
                     }
                     Ok(WsClientEvent::Ack { message_ids }) => {
-                        if self.user_id.is_none() {
+                        if self.username.is_none() {
                             Self::send_error(ctx, "send register event first");
                             return;
                         }

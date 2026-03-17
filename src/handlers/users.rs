@@ -32,7 +32,7 @@ pub async fn save_username(
     };
 
     let email = claims.email.trim().to_lowercase();
-    let username = body.username.trim();
+    let username = body.username.trim().to_lowercase();
 
     if username.is_empty() {
         return HttpResponse::BadRequest().body("username cannot be empty");
@@ -42,7 +42,7 @@ pub async fn save_username(
 
     // Check if username already exists for a different user
     let existing_user = users_col
-        .find_one(doc! { "username": username }, None)
+        .find_one(doc! { "username": &username }, None)
         .await;
 
     match existing_user {
@@ -75,7 +75,7 @@ pub async fn save_username(
     let update = doc! {
         "$set": {
             "email": &email,
-            "username": username,
+            "username": &username,
             "updated_at": now,
         },
         "$setOnInsert": {
@@ -92,7 +92,7 @@ pub async fn save_username(
         .await
     {
         Ok(_) => HttpResponse::Ok().json(SaveUsernameResponse {
-            username: username.to_string(),
+            username,
         }),
         Err(e) => {
             // Check if it's a duplicate key error (E11000)

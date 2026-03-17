@@ -1,4 +1,7 @@
-use mongodb::{options::ClientOptions, options::CreateIndexOptions, Client, Database, IndexModel};
+use mongodb::{
+    options::{ClientOptions, CreateIndexOptions, IndexOptions},
+    Client, Database, IndexModel,
+};
 use mongodb::bson::{doc, Document}; 
 use std::env;
 
@@ -32,6 +35,19 @@ impl MongoRepo {
             .build();
 
         let _ = users_col.create_index(user_email_index, None::<CreateIndexOptions>).await;
+
+        let username_index_options = IndexOptions::builder()
+            .unique(Some(true))
+            .sparse(Some(true))
+            .build();
+        let user_username_index = IndexModel::builder()
+            .keys(doc! { "username": 1 })
+            .options(username_index_options)
+            .build();
+
+        let _ = users_col
+            .create_index(user_username_index, None::<CreateIndexOptions>)
+            .await;
 
         
         println!("MongoDB indexes checked.");

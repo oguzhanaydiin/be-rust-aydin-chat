@@ -49,7 +49,7 @@ impl AppState {
     pub async fn queue_message(&self, message: PendingMessage) {
         let mut mailboxes = self.mailboxes.write().await;
         mailboxes
-            .entry(message.to_user_id.clone())
+            .entry(message.to_username.clone())
             .or_default()
             .push(message);
     }
