@@ -184,11 +184,12 @@ pub async fn validate_email_otp(
         let user_filter = doc! { "email": &email };
         let user = users_col.find_one(user_filter, None).await.ok().flatten();
         let username = user.and_then(|u| u.username);
+        let user_id = username.clone();
 
         return HttpResponse::Ok().json(AuthSessionResponse {
             valid: true,
             token: Some(token),
-            user_id: Some(email.clone()),
+            user_id,
             email: Some(email),
             username,
         });
