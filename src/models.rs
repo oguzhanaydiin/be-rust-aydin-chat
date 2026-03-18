@@ -73,6 +73,8 @@ pub struct PendingMessage {
     pub from_username: String,
     pub to_username: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_data_url: Option<String>,
     pub created_at: ChronoDateTime<Utc>,
 }
 
@@ -86,6 +88,7 @@ pub enum WsClientEvent {
         #[serde(alias = "to_user_id")]
         to_username: String,
         text: String,
+        image_data_url: Option<String>,
         client_message_id: Option<String>,
     },
     Ack { message_ids: Vec<String> },

@@ -13,6 +13,7 @@ use crate::models::{PendingMessage, User, WsClientEvent, WsServerEvent};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_WS_FRAME_SIZE: usize = 32 * 1024 * 1024;
 
 pub async fn ws_index(
     req: HttpRequest,
@@ -29,7 +30,9 @@ pub async fn ws_index(
         hb: Instant::now(),
     };
 
-    ws::start(session, &req, stream)
+    ws::WsResponseBuilder::new(session, &req, stream)
+        .frame_size(MAX_WS_FRAME_SIZE)
+        .start()
 }
 
 struct ChatWsSession {
@@ -124,17 +127,39 @@ impl ChatWsSession {
         &self,
         to_username: String,
         text: String,
+        image_data_url: Option<String>,
         client_message_id: Option<String>,
-    ) {
+    ) -> Result<(), String> {
         let Some(from_username) = self.username.clone() else {
-            return;
+            return Err("send register event first".to_string());
         };
 
         let normalized_to = to_username.trim().to_lowercase();
         let normalized_text = text.trim().to_string();
+        let normalized_image_data_url = image_data_url.and_then(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
 
-        if normalized_to.is_empty() || normalized_text.is_empty() {
-            return;
+        if normalized_to.is_empty()
+            || (normalized_text.is_empty() && normalized_image_data_url.is_none())
+        {
+            return Err("to_username and at least one content field are required".to_string());
+        }
+
+        if let Some(image) = &normalized_image_data_url {
+            const MAX_IMAGE_DATA_URL_BYTES: usize = 6 * 1024 * 1024;
+            if !image.starts_with("data:image/") || image.len() > MAX_IMAGE_DATA_URL_BYTES {
+                return Err("image payload is invalid or too large".to_string());
+            }
+        }
+
+        if normalized_text.len() > 4000 {
+            return Err("text is too long".to_string());
         }
 
         let state = self.state.clone();
@@ -146,6 +171,7 @@ impl ChatWsSession {
                 from_username,
                 to_username: normalized_to.clone(),
                 text: normalized_text,
+                image_data_url: normalized_image_data_url,
                 created_at: Utc::now(),
             };
 
@@ -175,6 +201,8 @@ impl ChatWsSession {
                 }
             }
         });
+
+        Ok(())
     }
 
     fn handle_ack(&self, message_ids: Vec<String>) {
@@ -283,6 +311,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                     Ok(WsClientEvent::SendMessage {
                         to_username,
                         text,
+                        image_data_url,
                         client_message_id,
                     }) => {
                         if self.username.is_none() {
@@ -290,12 +319,25 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             return;
                         }
 
-                        if to_username.trim().is_empty() || text.trim().is_empty() {
-                            Self::send_error(ctx, "to_username and text cannot be empty");
+                        let has_text = !text.trim().is_empty();
+                        let has_image = image_data_url
+                            .as_ref()
+                            .map(|value| !value.trim().is_empty())
+                            .unwrap_or(false);
+
+                        if to_username.trim().is_empty() || (!has_text && !has_image) {
+                            Self::send_error(ctx, "to_username and at least one content field are required");
                             return;
                         }
 
-                        self.handle_send_message(to_username, text, client_message_id);
+                        if let Err(message) = self.handle_send_message(
+                            to_username,
+                            text,
+                            image_data_url,
+                            client_message_id,
+                        ) {
+                            Self::send_error(ctx, &message);
+                        }
                     }
                     Ok(WsClientEvent::Ack { message_ids }) => {
                         if self.username.is_none() {
@@ -329,7 +371,8 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
             Ok(ws::Message::Binary(_)) => {}
             Ok(ws::Message::Continuation(_)) => {}
             Ok(ws::Message::Nop) => {}
-            Err(_) => {
+            Err(err) => {
+                eprintln!("ws protocol error: {err}");
                 ctx.stop();
             }
         }
