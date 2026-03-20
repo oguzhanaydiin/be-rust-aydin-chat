@@ -4,6 +4,7 @@ use crate::handlers::{health, otp, users, ws};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/health", web::get().to(health::get_status))
+    .route("/users", web::get().to(users::list_users))
     .route("/users/username", web::put().to(users::save_username))
     .route("/ws", web::get().to(ws::ws_index))
     .route("/otp/send", web::post().to(otp::send_email_otp))
