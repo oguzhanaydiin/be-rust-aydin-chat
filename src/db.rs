@@ -49,6 +49,19 @@ impl MongoRepo {
             .create_index(user_username_index, None::<CreateIndexOptions>)
             .await;
 
+        let friendships_col = self.db.collection::<Document>("friendships");
+        let friendship_pair_index_options = IndexOptions::builder()
+            .unique(Some(true))
+            .build();
+        let friendship_pair_index = IndexModel::builder()
+            .keys(doc! { "user_a": 1, "user_b": 1 })
+            .options(friendship_pair_index_options)
+            .build();
+
+        let _ = friendships_col
+            .create_index(friendship_pair_index, None::<CreateIndexOptions>)
+            .await;
+
         
         println!("MongoDB indexes checked.");
     }

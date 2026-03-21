@@ -65,6 +65,44 @@ pub struct SaveUsernameResponse {
     pub username: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FriendshipStatus {
+    Pending,
+    Accepted,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Friendship {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub user_a: String,
+    pub user_b: String,
+    pub requested_by: String,
+    pub status: FriendshipStatus,
+    pub created_at: BsonDateTime,
+    pub updated_at: BsonDateTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<BsonDateTime>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendFriendRequestBody {
+    pub to_username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AcceptFriendRequestBody {
+    pub from_username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FriendSnapshot {
+    pub accepted_friends: Vec<String>,
+    pub incoming_requests: Vec<String>,
+    pub outgoing_requests: Vec<String>,
+}
+
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -100,6 +138,12 @@ pub enum WsClientEvent {
 pub enum WsServerEvent {
     Registered { username: String },
     OnlineUsers { users: Vec<String> },
+    FriendSnapshot {
+        accepted_friends: Vec<String>,
+        incoming_requests: Vec<String>,
+        outgoing_requests: Vec<String>,
+    },
+    FriendRequestAccepted { username: String },
     Inbox { messages: Vec<PendingMessage> },
     MessageQueued {
         message_id: String,
