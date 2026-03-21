@@ -9,7 +9,6 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::app_state::AppState;
 use crate::auth::verify_token;
-use crate::handlers::friends::emit_friend_snapshot;
 use crate::models::{PendingMessage, User, WsClientEvent, WsServerEvent};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
@@ -98,8 +97,6 @@ impl ChatWsSession {
             }) {
                 let _ = tx.send(payload);
             }
-
-            emit_friend_snapshot(&state, &normalized).await;
 
             let inbox = state.get_inbox(&normalized).await;
 

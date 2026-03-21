@@ -6,7 +6,7 @@ use crate::app_state::AppState;
 use crate::auth::{verify_token, AuthClaims};
 use crate::models::{
     AcceptFriendRequestBody, FriendSnapshot, Friendship, FriendshipStatus, SendFriendRequestBody,
-    User, WsServerEvent,
+    User,
 };
 
 fn verify_request_claims(data: &web::Data<AppState>, req: &HttpRequest) -> Result<AuthClaims, HttpResponse> {
@@ -123,18 +123,6 @@ pub async fn build_friend_snapshot(db: &mongodb::Database, username: &str) -> Re
     })
 }
 
-pub async fn emit_friend_snapshot(state: &web::Data<AppState>, username: &str) {
-    if let Ok(snapshot) = build_friend_snapshot(&state.db, username).await {
-        if let Ok(payload) = serde_json::to_string(&WsServerEvent::FriendSnapshot {
-            accepted_friends: snapshot.accepted_friends,
-            incoming_requests: snapshot.incoming_requests,
-            outgoing_requests: snapshot.outgoing_requests,
-        }) {
-            let _ = state.dispatch_to_user(username, &payload).await;
-        }
-    }
-}
-
 pub async fn list_friends(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -246,9 +234,6 @@ pub async fn send_friend_request(
         }));
     }
 
-    emit_friend_snapshot(&data, &from_username).await;
-    emit_friend_snapshot(&data, &to_username).await;
-
     HttpResponse::Created().json(serde_json::json!({ "ok": true }))
 }
 
@@ -318,21 +303,6 @@ pub async fn accept_friend_request(
             "error": "Database error",
             "message": e.to_string()
         }));
-    }
-
-    emit_friend_snapshot(&data, &current_username).await;
-    emit_friend_snapshot(&data, &from_username).await;
-
-    if let Ok(payload_for_current) = serde_json::to_string(&WsServerEvent::FriendRequestAccepted {
-        username: from_username.clone(),
-    }) {
-        let _ = data.dispatch_to_user(&current_username, &payload_for_current).await;
-    }
-
-    if let Ok(payload_for_sender) = serde_json::to_string(&WsServerEvent::FriendRequestAccepted {
-        username: current_username.clone(),
-    }) {
-        let _ = data.dispatch_to_user(&from_username, &payload_for_sender).await;
     }
 
     HttpResponse::Ok().json(serde_json::json!({ "ok": true }))

@@ -138,12 +138,6 @@ pub enum WsClientEvent {
 pub enum WsServerEvent {
     Registered { username: String },
     OnlineUsers { users: Vec<String> },
-    FriendSnapshot {
-        accepted_friends: Vec<String>,
-        incoming_requests: Vec<String>,
-        outgoing_requests: Vec<String>,
-    },
-    FriendRequestAccepted { username: String },
     Inbox { messages: Vec<PendingMessage> },
     MessageQueued {
         message_id: String,
