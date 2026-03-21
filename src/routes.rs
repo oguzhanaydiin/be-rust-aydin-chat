@@ -7,6 +7,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .route("/users", web::get().to(users::list_users))
     .route("/users/username", web::put().to(users::save_username))
     .route("/friends", web::get().to(friends::list_friends))
+    .route("/friends/{username}", web::delete().to(friends::remove_friend))
     .route("/friends/requests", web::post().to(friends::send_friend_request))
     .route("/friends/requests/accept", web::post().to(friends::accept_friend_request))
     .route("/ws", web::get().to(ws::ws_index))

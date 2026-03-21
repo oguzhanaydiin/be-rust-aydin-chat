@@ -307,3 +307,43 @@ pub async fn accept_friend_request(
 
     HttpResponse::Ok().json(serde_json::json!({ "ok": true }))
 }
+
+pub async fn remove_friend(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    let claims = match verify_request_claims(&data, &req) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+
+    let email = normalize_identity(&claims.email);
+    let current_username = match resolve_username_by_email(&data.db, &email).await {
+        Ok(username) => username,
+        Err(response) => return response,
+    };
+
+    let target_username = normalize_identity(&path.into_inner());
+    if target_username.is_empty() {
+        return HttpResponse::BadRequest().body("username is required");
+    }
+
+    if current_username == target_username {
+        return HttpResponse::BadRequest().body("cannot remove self");
+    }
+
+    let (user_a, user_b) = sorted_pair(&current_username, &target_username);
+    let friendships_col = data.db.collection::<Friendship>("friendships");
+
+    match friendships_col
+        .delete_one(doc! { "user_a": &user_a, "user_b": &user_b }, None)
+        .await
+    {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "Database error",
+            "message": e.to_string()
+        })),
+    }
+}
