@@ -51,6 +51,8 @@ pub struct User {
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_data_url: Option<String>,
     pub created_at: BsonDateTime,
     pub updated_at: BsonDateTime,
 }
@@ -63,6 +65,26 @@ pub struct SaveUsernameRequest {
 #[derive(Serialize)]
 pub struct SaveUsernameResponse {
     pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    pub avatar_data_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct UserProfileResponse {
+    pub username: String,
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_data_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PublicProfileResponse {
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_data_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
