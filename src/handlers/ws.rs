@@ -172,6 +172,7 @@ impl ChatWsSession {
                 to_username: normalized_to.clone(),
                 text: normalized_text,
                 image_data_url: normalized_image_data_url,
+                hearted_by: Vec::new(),
                 created_at: Utc::now(),
             };
 
@@ -219,6 +220,35 @@ impl ChatWsSession {
                 let _ = tx.send(payload);
             }
         });
+    }
+
+    fn handle_heart_message(&self, message_id: String, to_username: String) -> Result<(), String> {
+        let Some(by_username) = self.username.clone() else {
+            return Err("send register event first".to_string());
+        };
+
+        let normalized_message_id = message_id.trim().to_string();
+        let normalized_to = to_username.trim().to_lowercase();
+
+        if normalized_message_id.is_empty() || normalized_to.is_empty() {
+            return Err("message_id and to_username are required".to_string());
+        }
+
+        let state = self.state.clone();
+
+        tokio::spawn(async move {
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageHearted {
+                message_id: normalized_message_id,
+                by_username: by_username.clone(),
+            }) {
+                let _ = state.dispatch_to_user(&by_username, &payload).await;
+                if normalized_to != by_username {
+                    let _ = state.dispatch_to_user(&normalized_to, &payload).await;
+                }
+            }
+        });
+
+        Ok(())
     }
 }
 
@@ -336,6 +366,19 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             image_data_url,
                             client_message_id,
                         ) {
+                            Self::send_error(ctx, &message);
+                        }
+                    }
+                    Ok(WsClientEvent::HeartMessage {
+                        message_id,
+                        to_username,
+                    }) => {
+                        if self.username.is_none() {
+                            Self::send_error(ctx, "send register event first");
+                            return;
+                        }
+
+                        if let Err(message) = self.handle_heart_message(message_id, to_username) {
                             Self::send_error(ctx, &message);
                         }
                     }

@@ -135,6 +135,8 @@ pub struct PendingMessage {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_data_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hearted_by: Vec<String>,
     pub created_at: ChronoDateTime<Utc>,
 }
 
@@ -150,6 +152,11 @@ pub enum WsClientEvent {
         text: String,
         image_data_url: Option<String>,
         client_message_id: Option<String>,
+    },
+    HeartMessage {
+        message_id: String,
+        #[serde(alias = "to_user_id")]
+        to_username: String,
     },
     Ack { message_ids: Vec<String> },
     GetOnlineUsers,
@@ -170,6 +177,10 @@ pub enum WsServerEvent {
         client_message_id: Option<String>,
     },
     NewMessage { message: PendingMessage },
+    MessageHearted {
+        message_id: String,
+        by_username: String,
+    },
     AckResult { removed_count: usize },
     Error { message: String },
 }
