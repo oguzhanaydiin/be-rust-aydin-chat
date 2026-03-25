@@ -237,9 +237,14 @@ impl ChatWsSession {
         let state = self.state.clone();
 
         tokio::spawn(async move {
+            let hearted_by = state
+                .toggle_message_heart(&normalized_message_id, &by_username)
+                .await;
+
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageHearted {
-                message_id: normalized_message_id,
+                message_id: normalized_message_id.clone(),
                 by_username: by_username.clone(),
+                hearted_by,
             }) {
                 let _ = state.dispatch_to_user(&by_username, &payload).await;
                 if normalized_to != by_username {

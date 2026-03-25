@@ -14,6 +14,7 @@ pub struct AppState {
     pub db: mongodb::Database,
     pub jwt_secret: String,
     pub mailboxes: RwLock<HashMap<String, Vec<PendingMessage>>>,
+    pub message_reactions: RwLock<HashMap<String, Vec<String>>>,
     pub online_users: RwLock<HashMap<String, Vec<UserConnection>>>,
 }
 
@@ -47,6 +48,13 @@ impl AppState {
     }
 
     pub async fn queue_message(&self, message: PendingMessage) {
+        {
+            let mut reactions = self.message_reactions.write().await;
+            reactions
+                .entry(message.id.clone())
+                .or_insert_with(|| message.hearted_by.clone());
+        }
+
         let mut mailboxes = self.mailboxes.write().await;
         mailboxes
             .entry(message.to_username.clone())
@@ -56,7 +64,49 @@ impl AppState {
 
     pub async fn get_inbox(&self, user_id: &str) -> Vec<PendingMessage> {
         let mailboxes = self.mailboxes.read().await;
-        mailboxes.get(user_id).cloned().unwrap_or_default()
+        let mut messages = mailboxes.get(user_id).cloned().unwrap_or_default();
+        drop(mailboxes);
+
+        let reactions = self.message_reactions.read().await;
+        messages.iter_mut().for_each(|msg| {
+            if let Some(hearted_by) = reactions.get(&msg.id) {
+                msg.hearted_by = hearted_by.clone();
+            }
+        });
+
+        messages
+    }
+
+    pub async fn toggle_message_heart(&self, message_id: &str, by_username: &str) -> Vec<String> {
+        let normalized_by = by_username.trim().to_lowercase();
+        let normalized_message_id = message_id.trim().to_string();
+
+        if normalized_by.is_empty() || normalized_message_id.is_empty() {
+            return Vec::new();
+        }
+
+        let next_hearted_by = {
+            let mut reactions = self.message_reactions.write().await;
+            let entry = reactions.entry(normalized_message_id.clone()).or_default();
+            if let Some(index) = entry.iter().position(|username| username == &normalized_by) {
+                entry.remove(index);
+            } else {
+                entry.push(normalized_by.clone());
+            }
+
+            entry.clone()
+        };
+
+        let mut mailboxes = self.mailboxes.write().await;
+        mailboxes.values_mut().for_each(|messages| {
+            messages.iter_mut().for_each(|msg| {
+                if msg.id == normalized_message_id {
+                    msg.hearted_by = next_hearted_by.clone();
+                }
+            });
+        });
+
+        next_hearted_by
     }
 
     pub async fn ack_messages(&self, user_id: &str, message_ids: &[String]) -> usize {

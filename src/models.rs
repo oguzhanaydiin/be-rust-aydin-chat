@@ -180,6 +180,7 @@ pub enum WsServerEvent {
     MessageHearted {
         message_id: String,
         by_username: String,
+        hearted_by: Vec<String>,
     },
     AckResult { removed_count: usize },
     Error { message: String },

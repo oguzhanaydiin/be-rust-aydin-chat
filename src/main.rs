@@ -19,6 +19,7 @@ async fn main() -> std::io::Result<()> {
         db: db_instance,
         jwt_secret,
         mailboxes: RwLock::new(HashMap::new()),
+        message_reactions: RwLock::new(HashMap::new()),
         online_users: RwLock::new(HashMap::new()),
     });
     
