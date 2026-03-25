@@ -14,7 +14,7 @@ pub struct AppState {
     pub db: mongodb::Database,
     pub jwt_secret: String,
     pub mailboxes: RwLock<HashMap<String, Vec<PendingMessage>>>,
-    pub message_reactions: RwLock<HashMap<String, Vec<String>>>,
+    pub message_reactions: RwLock<HashMap<String, HashMap<String, Vec<String>>>>,
     pub online_users: RwLock<HashMap<String, Vec<UserConnection>>>,
 }
 
@@ -52,7 +52,7 @@ impl AppState {
             let mut reactions = self.message_reactions.write().await;
             reactions
                 .entry(message.id.clone())
-                .or_insert_with(|| message.hearted_by.clone());
+                .or_insert_with(|| message.reactions.clone());
         }
 
         let mut mailboxes = self.mailboxes.write().await;
@@ -69,44 +69,59 @@ impl AppState {
 
         let reactions = self.message_reactions.read().await;
         messages.iter_mut().for_each(|msg| {
-            if let Some(hearted_by) = reactions.get(&msg.id) {
-                msg.hearted_by = hearted_by.clone();
+            if let Some(message_reactions) = reactions.get(&msg.id) {
+                msg.reactions = message_reactions.clone();
             }
         });
 
         messages
     }
 
-    pub async fn toggle_message_heart(&self, message_id: &str, by_username: &str) -> Vec<String> {
+    pub async fn toggle_message_reaction(
+        &self,
+        message_id: &str,
+        reaction: &str,
+        by_username: &str,
+    ) -> HashMap<String, Vec<String>> {
         let normalized_by = by_username.trim().to_lowercase();
         let normalized_message_id = message_id.trim().to_string();
+        let normalized_reaction = reaction.trim().to_string();
 
-        if normalized_by.is_empty() || normalized_message_id.is_empty() {
-            return Vec::new();
+        if normalized_by.is_empty() || normalized_message_id.is_empty() || normalized_reaction.is_empty() {
+            return HashMap::new();
         }
 
-        let next_hearted_by = {
+        let next_reactions = {
             let mut reactions = self.message_reactions.write().await;
-            let entry = reactions.entry(normalized_message_id.clone()).or_default();
-            if let Some(index) = entry.iter().position(|username| username == &normalized_by) {
-                entry.remove(index);
+            let message_entry = reactions.entry(normalized_message_id.clone()).or_default();
+            let users_entry = message_entry.entry(normalized_reaction.clone()).or_default();
+
+            if let Some(index) = users_entry
+                .iter()
+                .position(|username| username == &normalized_by)
+            {
+                users_entry.remove(index);
             } else {
-                entry.push(normalized_by.clone());
+                users_entry.push(normalized_by.clone());
             }
 
-            entry.clone()
+            if users_entry.is_empty() {
+                message_entry.remove(&normalized_reaction);
+            }
+
+            message_entry.clone()
         };
 
         let mut mailboxes = self.mailboxes.write().await;
         mailboxes.values_mut().for_each(|messages| {
             messages.iter_mut().for_each(|msg| {
                 if msg.id == normalized_message_id {
-                    msg.hearted_by = next_hearted_by.clone();
+                    msg.reactions = next_reactions.clone();
                 }
             });
         });
 
-        next_hearted_by
+        next_reactions
     }
 
     pub async fn ack_messages(&self, user_id: &str, message_ids: &[String]) -> usize {

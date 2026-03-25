@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use actix::{Actor, ActorContext, ActorFutureExt, AsyncContext, StreamHandler, WrapFuture};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
@@ -172,7 +173,7 @@ impl ChatWsSession {
                 to_username: normalized_to.clone(),
                 text: normalized_text,
                 image_data_url: normalized_image_data_url,
-                hearted_by: Vec::new(),
+                reactions: HashMap::new(),
                 created_at: Utc::now(),
             };
 
@@ -222,29 +223,34 @@ impl ChatWsSession {
         });
     }
 
-    fn handle_heart_message(&self, message_id: String, to_username: String) -> Result<(), String> {
+    fn handle_react_message(
+        &self,
+        message_id: String,
+        to_username: String,
+        reaction: String,
+    ) -> Result<(), String> {
         let Some(by_username) = self.username.clone() else {
             return Err("send register event first".to_string());
         };
 
         let normalized_message_id = message_id.trim().to_string();
         let normalized_to = to_username.trim().to_lowercase();
+        let normalized_reaction = reaction.trim().to_string();
 
-        if normalized_message_id.is_empty() || normalized_to.is_empty() {
-            return Err("message_id and to_username are required".to_string());
+        if normalized_message_id.is_empty() || normalized_to.is_empty() || normalized_reaction.is_empty() {
+            return Err("message_id, to_username and reaction are required".to_string());
         }
 
         let state = self.state.clone();
 
         tokio::spawn(async move {
-            let hearted_by = state
-                .toggle_message_heart(&normalized_message_id, &by_username)
+            let reactions = state
+                .toggle_message_reaction(&normalized_message_id, &normalized_reaction, &by_username)
                 .await;
 
-            if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageHearted {
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageReactionsUpdated {
                 message_id: normalized_message_id.clone(),
-                by_username: by_username.clone(),
-                hearted_by,
+                reactions,
             }) {
                 let _ = state.dispatch_to_user(&by_username, &payload).await;
                 if normalized_to != by_username {
@@ -374,16 +380,17 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             Self::send_error(ctx, &message);
                         }
                     }
-                    Ok(WsClientEvent::HeartMessage {
+                    Ok(WsClientEvent::ReactMessage {
                         message_id,
                         to_username,
+                        reaction,
                     }) => {
                         if self.username.is_none() {
                             Self::send_error(ctx, "send register event first");
                             return;
                         }
 
-                        if let Err(message) = self.handle_heart_message(message_id, to_username) {
+                        if let Err(message) = self.handle_react_message(message_id, to_username, reaction) {
                             Self::send_error(ctx, &message);
                         }
                     }

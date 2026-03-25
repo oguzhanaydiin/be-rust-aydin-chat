@@ -1,6 +1,7 @@
 use chrono::{DateTime as ChronoDateTime, Utc};
 use mongodb::bson::{oid::ObjectId, DateTime as BsonDateTime};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize)]
 pub struct AuthSessionResponse {
@@ -135,8 +136,8 @@ pub struct PendingMessage {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_data_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hearted_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub reactions: HashMap<String, Vec<String>>,
     pub created_at: ChronoDateTime<Utc>,
 }
 
@@ -153,10 +154,11 @@ pub enum WsClientEvent {
         image_data_url: Option<String>,
         client_message_id: Option<String>,
     },
-    HeartMessage {
+    ReactMessage {
         message_id: String,
         #[serde(alias = "to_user_id")]
         to_username: String,
+        reaction: String,
     },
     Ack { message_ids: Vec<String> },
     GetOnlineUsers,
@@ -177,10 +179,9 @@ pub enum WsServerEvent {
         client_message_id: Option<String>,
     },
     NewMessage { message: PendingMessage },
-    MessageHearted {
+    MessageReactionsUpdated {
         message_id: String,
-        by_username: String,
-        hearted_by: Vec<String>,
+        reactions: HashMap<String, Vec<String>>,
     },
     AckResult { removed_count: usize },
     Error { message: String },
