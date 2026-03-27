@@ -68,12 +68,23 @@ impl ChatWsSession {
         Ok(normalized)
     }
 
-    fn send_error(ctx: &mut ws::WebsocketContext<Self>, message: &str) {
+    fn send_error_with_metadata(
+        ctx: &mut ws::WebsocketContext<Self>,
+        message: &str,
+        client_message_id: Option<String>,
+        message_id: Option<String>,
+    ) {
         if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
             message: message.to_string(),
+            client_message_id,
+            message_id,
         }) {
             ctx.text(payload);
         }
+    }
+
+    fn send_error(ctx: &mut ws::WebsocketContext<Self>, message: &str) {
+        Self::send_error_with_metadata(ctx, message, None, None);
     }
 
     fn handle_register(&mut self, username: String) {
@@ -356,7 +367,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                         client_message_id,
                     }) => {
                         if self.username.is_none() {
-                            Self::send_error(ctx, "send register event first");
+                            Self::send_error_with_metadata(
+                                ctx,
+                                "send register event first",
+                                client_message_id.clone(),
+                                None,
+                            );
                             return;
                         }
 
@@ -367,7 +383,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             .unwrap_or(false);
 
                         if to_username.trim().is_empty() || (!has_text && !has_image) {
-                            Self::send_error(ctx, "to_username and at least one content field are required");
+                            Self::send_error_with_metadata(
+                                ctx,
+                                "to_username and at least one content field are required",
+                                client_message_id.clone(),
+                                None,
+                            );
                             return;
                         }
 
@@ -375,9 +396,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             to_username,
                             text,
                             image_data_url,
-                            client_message_id,
+                            client_message_id.clone(),
                         ) {
-                            Self::send_error(ctx, &message);
+                            Self::send_error_with_metadata(ctx, &message, client_message_id, None);
                         }
                     }
                     Ok(WsClientEvent::ReactMessage {
