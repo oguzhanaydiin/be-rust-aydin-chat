@@ -184,5 +184,11 @@ pub enum WsServerEvent {
         reactions: HashMap<String, Vec<String>>,
     },
     AckResult { removed_count: usize },
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+    },
 }
