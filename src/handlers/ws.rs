@@ -5,12 +5,13 @@ use actix::{Actor, ActorContext, ActorFutureExt, AsyncContext, StreamHandler, Wr
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
 use chrono::Utc;
+use mongodb::bson::doc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::app_state::AppState;
 use crate::auth::verify_token;
-use crate::models::{PendingMessage, User, WsClientEvent, WsServerEvent};
+use crate::models::{GroupMember, GroupPendingMessage, PendingMessage, User, WsClientEvent, WsServerEvent};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -68,6 +69,41 @@ impl ChatWsSession {
         Ok(normalized)
     }
 
+    async fn list_group_member_usernames(
+        state: web::Data<AppState>,
+        group_id: String,
+    ) -> Result<Vec<String>, String> {
+        let members_col = state.db.collection::<GroupMember>("group_members");
+        let mut cursor = members_col
+            .find(doc! { "group_id": &group_id }, None)
+            .await
+            .map_err(|_| "failed to fetch group members".to_string())?;
+
+        let mut members: Vec<String> = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut cursor).await {
+            let member = item.map_err(|_| "failed to fetch group members".to_string())?;
+            members.push(member.username);
+        }
+
+        members.sort_unstable();
+        members.dedup();
+        Ok(members)
+    }
+
+    async fn can_user_access_group(
+        state: web::Data<AppState>,
+        group_id: String,
+        username: String,
+    ) -> Result<bool, String> {
+        let members_col = state.db.collection::<GroupMember>("group_members");
+        let found = members_col
+            .find_one(doc! { "group_id": &group_id, "username": &username }, None)
+            .await
+            .map_err(|_| "failed to fetch group membership".to_string())?;
+
+        Ok(found.is_some())
+    }
+
     fn send_error_with_metadata(
         ctx: &mut ws::WebsocketContext<Self>,
         message: &str,
@@ -123,6 +159,13 @@ impl ChatWsSession {
             }
 
             if let Ok(payload) = serde_json::to_string(&WsServerEvent::Inbox { messages: inbox }) {
+                let _ = tx.send(payload);
+            }
+
+            let group_inbox = state.get_group_inbox(&normalized).await;
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::GroupInbox {
+                messages: group_inbox,
+            }) {
                 let _ = tx.send(payload);
             }
 
@@ -272,6 +315,218 @@ impl ChatWsSession {
 
         Ok(())
     }
+
+    fn handle_send_group_message(
+        &self,
+        group_id: String,
+        text: String,
+        image_data_url: Option<String>,
+        client_message_id: Option<String>,
+    ) -> Result<(), String> {
+        let Some(from_username) = self.username.clone() else {
+            return Err("send register event first".to_string());
+        };
+
+        let normalized_group_id = group_id.trim().to_lowercase();
+        let normalized_text = text.trim().to_string();
+        let normalized_image_data_url = image_data_url.and_then(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+
+        if normalized_group_id.is_empty()
+            || (normalized_text.is_empty() && normalized_image_data_url.is_none())
+        {
+            return Err("group_id and at least one content field are required".to_string());
+        }
+
+        if let Some(image) = &normalized_image_data_url {
+            const MAX_IMAGE_DATA_URL_BYTES: usize = 6 * 1024 * 1024;
+            if !image.starts_with("data:image/") || image.len() > MAX_IMAGE_DATA_URL_BYTES {
+                return Err("image payload is invalid or too large".to_string());
+            }
+        }
+
+        if normalized_text.len() > 4000 {
+            return Err("text is too long".to_string());
+        }
+
+        let state = self.state.clone();
+        let tx = self.out_tx.clone();
+
+        tokio::spawn(async move {
+            let can_access = Self::can_user_access_group(
+                state.clone(),
+                normalized_group_id.clone(),
+                from_username.clone(),
+            )
+            .await;
+
+            let can_access = match can_access {
+                Ok(value) => value,
+                Err(message) => {
+                    if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                        message,
+                        client_message_id,
+                        message_id: None,
+                    }) {
+                        let _ = tx.send(payload);
+                    }
+                    return;
+                }
+            };
+
+            if !can_access {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                    message: "you are not a member of this group".to_string(),
+                    client_message_id,
+                    message_id: None,
+                }) {
+                    let _ = tx.send(payload);
+                }
+                return;
+            }
+
+            let members = match Self::list_group_member_usernames(state.clone(), normalized_group_id.clone()).await {
+                Ok(items) => items,
+                Err(message) => {
+                    if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                        message,
+                        client_message_id,
+                        message_id: None,
+                    }) {
+                        let _ = tx.send(payload);
+                    }
+                    return;
+                }
+            };
+
+            if members.is_empty() {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                    message: "group has no members".to_string(),
+                    client_message_id,
+                    message_id: None,
+                }) {
+                    let _ = tx.send(payload);
+                }
+                return;
+            }
+
+            let message = GroupPendingMessage {
+                id: generate_id(),
+                group_id: normalized_group_id.clone(),
+                from_username: from_username.clone(),
+                text: normalized_text,
+                image_data_url: normalized_image_data_url,
+                reactions: HashMap::new(),
+                created_at: Utc::now(),
+            };
+
+            state.queue_group_message(message.clone(), &members).await;
+
+            let delivered = if let Ok(payload) = serde_json::to_string(&WsServerEvent::NewGroupMessage {
+                message: message.clone(),
+            }) {
+                state.dispatch_to_users(&members, &payload).await
+            } else {
+                0
+            };
+
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::GroupMessageQueued {
+                message_id: message.id.clone(),
+                group_id: normalized_group_id.clone(),
+                client_message_id: client_message_id.clone(),
+            }) {
+                let _ = tx.send(payload);
+            }
+
+            if delivered > 0 {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::GroupMessageDelivered {
+                    message_id: message.id,
+                    group_id: normalized_group_id,
+                    client_message_id,
+                }) {
+                    let _ = tx.send(payload);
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn handle_ack_group(&self, message_ids: Vec<String>) {
+        let Some(username) = self.username.clone() else {
+            return;
+        };
+
+        let state = self.state.clone();
+        let tx = self.out_tx.clone();
+
+        tokio::spawn(async move {
+            let removed_count = state.ack_group_messages(&username, &message_ids).await;
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::AckGroupResult { removed_count }) {
+                let _ = tx.send(payload);
+            }
+        });
+    }
+
+    fn handle_react_group_message(
+        &self,
+        message_id: String,
+        group_id: String,
+        reaction: String,
+    ) -> Result<(), String> {
+        let Some(by_username) = self.username.clone() else {
+            return Err("send register event first".to_string());
+        };
+
+        let normalized_message_id = message_id.trim().to_string();
+        let normalized_group_id = group_id.trim().to_lowercase();
+        let normalized_reaction = reaction.trim().to_string();
+
+        if normalized_message_id.is_empty() || normalized_group_id.is_empty() || normalized_reaction.is_empty() {
+            return Err("message_id, group_id and reaction are required".to_string());
+        }
+
+        let state = self.state.clone();
+
+        tokio::spawn(async move {
+            let can_access = Self::can_user_access_group(
+                state.clone(),
+                normalized_group_id.clone(),
+                by_username.clone(),
+            )
+            .await
+            .unwrap_or(false);
+
+            if !can_access {
+                return;
+            }
+
+            let reactions = state
+                .toggle_group_message_reaction(&normalized_message_id, &normalized_reaction, &by_username)
+                .await;
+
+            let recipients = state.group_message_recipients(&normalized_message_id).await;
+            if recipients.is_empty() {
+                return;
+            }
+
+            if let Ok(payload) = serde_json::to_string(&WsServerEvent::GroupMessageReactionsUpdated {
+                message_id: normalized_message_id,
+                group_id: normalized_group_id,
+                reactions,
+            }) {
+                let _ = state.dispatch_to_users(&recipients, &payload).await;
+            }
+        });
+
+        Ok(())
+    }
 }
 
 impl Actor for ChatWsSession {
@@ -415,6 +670,61 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                             Self::send_error(ctx, &message);
                         }
                     }
+                    Ok(WsClientEvent::SendGroupMessage {
+                        group_id,
+                        text,
+                        image_data_url,
+                        client_message_id,
+                    }) => {
+                        if self.username.is_none() {
+                            Self::send_error_with_metadata(
+                                ctx,
+                                "send register event first",
+                                client_message_id.clone(),
+                                None,
+                            );
+                            return;
+                        }
+
+                        let has_text = !text.trim().is_empty();
+                        let has_image = image_data_url
+                            .as_ref()
+                            .map(|value| !value.trim().is_empty())
+                            .unwrap_or(false);
+
+                        if group_id.trim().is_empty() || (!has_text && !has_image) {
+                            Self::send_error_with_metadata(
+                                ctx,
+                                "group_id and at least one content field are required",
+                                client_message_id.clone(),
+                                None,
+                            );
+                            return;
+                        }
+
+                        if let Err(message) = self.handle_send_group_message(
+                            group_id,
+                            text,
+                            image_data_url,
+                            client_message_id.clone(),
+                        ) {
+                            Self::send_error_with_metadata(ctx, &message, client_message_id, None);
+                        }
+                    }
+                    Ok(WsClientEvent::ReactGroupMessage {
+                        message_id,
+                        group_id,
+                        reaction,
+                    }) => {
+                        if self.username.is_none() {
+                            Self::send_error(ctx, "send register event first");
+                            return;
+                        }
+
+                        if let Err(message) = self.handle_react_group_message(message_id, group_id, reaction) {
+                            Self::send_error(ctx, &message);
+                        }
+                    }
                     Ok(WsClientEvent::Ack { message_ids }) => {
                         if self.username.is_none() {
                             Self::send_error(ctx, "send register event first");
@@ -422,6 +732,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                         }
 
                         self.handle_ack(message_ids);
+                    }
+                    Ok(WsClientEvent::AckGroup { message_ids }) => {
+                        if self.username.is_none() {
+                            Self::send_error(ctx, "send register event first");
+                            return;
+                        }
+
+                        self.handle_ack_group(message_ids);
                     }
                     Ok(WsClientEvent::GetOnlineUsers) => {
                         let state = self.state.clone();
