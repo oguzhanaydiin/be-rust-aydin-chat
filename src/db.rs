@@ -62,6 +62,33 @@ impl MongoRepo {
             .create_index(friendship_pair_index, None::<CreateIndexOptions>)
             .await;
 
+        let chat_groups_col = self.db.collection::<Document>("chat_groups");
+        let group_creator_index = IndexModel::builder()
+            .keys(doc! { "created_by": 1 })
+            .build();
+        let _ = chat_groups_col
+            .create_index(group_creator_index, None::<CreateIndexOptions>)
+            .await;
+
+        let group_members_col = self.db.collection::<Document>("group_members");
+        let group_member_unique_options = IndexOptions::builder()
+            .unique(Some(true))
+            .build();
+        let group_member_unique = IndexModel::builder()
+            .keys(doc! { "group_id": 1, "username": 1 })
+            .options(group_member_unique_options)
+            .build();
+        let _ = group_members_col
+            .create_index(group_member_unique, None::<CreateIndexOptions>)
+            .await;
+
+        let group_member_by_user = IndexModel::builder()
+            .keys(doc! { "username": 1 })
+            .build();
+        let _ = group_members_col
+            .create_index(group_member_by_user, None::<CreateIndexOptions>)
+            .await;
+
         
         println!("MongoDB indexes checked.");
     }

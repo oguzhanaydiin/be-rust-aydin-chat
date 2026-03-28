@@ -141,6 +141,94 @@ pub struct PendingMessage {
     pub created_at: ChronoDateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GroupPendingMessage {
+    pub id: String,
+    pub group_id: String,
+    pub from_username: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_data_url: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub reactions: HashMap<String, Vec<String>>,
+    pub created_at: ChronoDateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupRole {
+    Leader,
+    Member,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChatGroup {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub name: String,
+    pub created_by: String,
+    pub created_at: BsonDateTime,
+    pub updated_at: BsonDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GroupMember {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub group_id: String,
+    pub username: String,
+    pub role: GroupRole,
+    #[serde(default)]
+    pub can_invite: bool,
+    pub added_by: String,
+    pub created_at: BsonDateTime,
+    pub updated_at: BsonDateTime,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateGroupRequest {
+    pub name: String,
+    #[serde(default)]
+    pub member_usernames: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupSummaryResponse {
+    pub group_id: String,
+    pub name: String,
+    pub role: GroupRole,
+    pub can_invite: bool,
+    pub member_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupMemberResponse {
+    pub username: String,
+    pub role: GroupRole,
+    pub can_invite: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupDetailResponse {
+    pub group_id: String,
+    pub name: String,
+    pub created_by: String,
+    pub members: Vec<GroupMemberResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddGroupMemberRequest {
+    pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateGroupMemberPermissionsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<GroupRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_invite: Option<bool>,
+}
+
 
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +248,19 @@ pub enum WsClientEvent {
         to_username: String,
         reaction: String,
     },
+    SendGroupMessage {
+        group_id: String,
+        text: String,
+        image_data_url: Option<String>,
+        client_message_id: Option<String>,
+    },
+    ReactGroupMessage {
+        message_id: String,
+        group_id: String,
+        reaction: String,
+    },
     Ack { message_ids: Vec<String> },
+    AckGroup { message_ids: Vec<String> },
     GetOnlineUsers,
 }
 
@@ -179,11 +279,29 @@ pub enum WsServerEvent {
         client_message_id: Option<String>,
     },
     NewMessage { message: PendingMessage },
+    GroupInbox { messages: Vec<GroupPendingMessage> },
+    GroupMessageQueued {
+        message_id: String,
+        group_id: String,
+        client_message_id: Option<String>,
+    },
+    GroupMessageDelivered {
+        message_id: String,
+        group_id: String,
+        client_message_id: Option<String>,
+    },
+    NewGroupMessage { message: GroupPendingMessage },
     MessageReactionsUpdated {
         message_id: String,
         reactions: HashMap<String, Vec<String>>,
     },
+    GroupMessageReactionsUpdated {
+        message_id: String,
+        group_id: String,
+        reactions: HashMap<String, Vec<String>>,
+    },
     AckResult { removed_count: usize },
+    AckGroupResult { removed_count: usize },
     Error {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
