@@ -170,26 +170,56 @@ pub async fn validate_email_otp(
     let is_valid = !otp_record.is_used && is_not_expired && is_code_match;
 
     if is_valid {
-        let _ = otp_col
-            .update_one(filter, doc! { "$set": { "is_used": true } }, None)
-            .await;
-
         let token = match issue_token(&data.jwt_secret, &email) {
             Ok(value) => value,
             Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
         };
 
-        // Fetch user's username if it exists
+        // Ensure a stable user record exists even before username setup.
         let users_col = data.db.collection::<User>("users");
         let user_filter = doc! { "email": &email };
-        let user = users_col.find_one(user_filter, None).await.ok().flatten();
-        let username = user.and_then(|u| u.username);
-        let user_id = username.clone();
+        let now = BsonDateTime::now();
+        let user_update = doc! {
+            "$set": {
+                "email": &email,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "created_at": now,
+            }
+        };
+        let find_options = mongodb::options::FindOneAndUpdateOptions::builder()
+            .upsert(true)
+            .return_document(mongodb::options::ReturnDocument::After)
+            .build();
+
+        let user = match users_col
+            .find_one_and_update(user_filter, user_update, find_options)
+            .await
+        {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                return HttpResponse::InternalServerError()
+                    .body("failed to create or load user after OTP validation");
+            }
+            Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
+        };
+
+        let Some(user_id) = user.id.map(|id| id.to_hex()) else {
+            return HttpResponse::InternalServerError()
+                .body("user record is missing a stable id");
+        };
+        let username = user.username;
+
+        // Only burn the OTP after token + stable user_id are ready.
+        let _ = otp_col
+            .update_one(filter, doc! { "$set": { "is_used": true } }, None)
+            .await;
 
         return HttpResponse::Ok().json(AuthSessionResponse {
             valid: true,
             token: Some(token),
-            user_id,
+            user_id: Some(user_id),
             email: Some(email),
             username,
         });
