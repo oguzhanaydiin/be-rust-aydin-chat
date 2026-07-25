@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use actix_web::{http::StatusCode, test, web, App};
-use chat_api::{app_state::AppState, routes};
+use chat_api::{app_state::AppState, auth::DEFAULT_JWT_TTL_SECONDS, routes};
 use mongodb::{
     options::{ClientOptions, ServerAddress},
     Client,
@@ -23,7 +23,12 @@ fn test_app_state(database_name: &str) -> AppState {
     AppState {
         db: client.database(database_name),
         jwt_secret: "test-secret".to_string(),
+        jwt_ttl_secs: DEFAULT_JWT_TTL_SECONDS,
         mailboxes: RwLock::new(HashMap::new()),
+        group_mailboxes: RwLock::new(HashMap::new()),
+        message_reactions: RwLock::new(HashMap::new()),
+        group_message_reactions: RwLock::new(HashMap::new()),
+        group_message_members: RwLock::new(HashMap::new()),
         online_users: RwLock::new(HashMap::new()),
     }
 }
