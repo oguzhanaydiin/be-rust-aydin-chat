@@ -1,6 +1,11 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
-use chat_api::{app_state::AppState, db::MongoRepo, routes};
+use chat_api::{
+    app_state::AppState,
+    auth::DEFAULT_JWT_TTL_SECONDS,
+    db::MongoRepo,
+    routes,
+};
 use dotenv::dotenv;
 use std::env;
 use std::io::{Error as IoError, ErrorKind};
@@ -15,9 +20,15 @@ async fn main() -> std::io::Result<()> {
     let db_instance = mongo_repo.get_db().clone();
     let jwt_secret = env::var("JWT_SECRET")
         .map_err(|_| IoError::new(ErrorKind::InvalidInput, "JWT_SECRET is missing"))?;
+    let jwt_ttl_secs = env::var("JWT_TTL_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_JWT_TTL_SECONDS);
     let app_state = web::Data::new(AppState {
         db: db_instance,
         jwt_secret,
+        jwt_ttl_secs,
         mailboxes: RwLock::new(HashMap::new()),
         group_mailboxes: RwLock::new(HashMap::new()),
         message_reactions: RwLock::new(HashMap::new()),

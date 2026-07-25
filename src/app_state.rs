@@ -13,6 +13,7 @@ pub struct UserConnection {
 pub struct AppState {
     pub db: mongodb::Database,
     pub jwt_secret: String,
+    pub jwt_ttl_secs: u64,
     pub mailboxes: RwLock<HashMap<String, Vec<PendingMessage>>>,
     pub group_mailboxes: RwLock<HashMap<String, Vec<GroupPendingMessage>>>,
     pub message_reactions: RwLock<HashMap<String, HashMap<String, Vec<String>>>>,

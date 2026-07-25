@@ -170,7 +170,7 @@ pub async fn validate_email_otp(
     let is_valid = !otp_record.is_used && is_not_expired && is_code_match;
 
     if is_valid {
-        let token = match issue_token(&data.jwt_secret, &email) {
+        let token = match issue_token(&data.jwt_secret, &email, data.jwt_ttl_secs) {
             Ok(value) => value,
             Err(e) => return HttpResponse::InternalServerError().json(e.to_string()),
         };
