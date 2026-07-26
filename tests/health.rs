@@ -24,6 +24,10 @@ fn test_app_state(database_name: &str) -> AppState {
         db: client.database(database_name),
         jwt_secret: "test-secret".to_string(),
         mailboxes: RwLock::new(HashMap::new()),
+        group_mailboxes: RwLock::new(HashMap::new()),
+        message_reactions: RwLock::new(HashMap::new()),
+        group_message_reactions: RwLock::new(HashMap::new()),
+        group_message_members: RwLock::new(HashMap::new()),
         online_users: RwLock::new(HashMap::new()),
     }
 }

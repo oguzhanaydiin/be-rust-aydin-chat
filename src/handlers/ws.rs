@@ -15,7 +15,9 @@ use crate::models::{GroupMember, GroupPendingMessage, PendingMessage, User, WsCl
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_WS_FRAME_SIZE: usize = 32 * 1024 * 1024;
+/// Small images only (~512KB data URL). Durable history lives on clients.
+const MAX_WS_IMAGE_DATA_URL_BYTES: usize = 512 * 1024;
+const MAX_WS_FRAME_SIZE: usize = 768 * 1024;
 
 pub async fn ws_index(
     req: HttpRequest,
@@ -207,9 +209,8 @@ impl ChatWsSession {
         }
 
         if let Some(image) = &normalized_image_data_url {
-            const MAX_IMAGE_DATA_URL_BYTES: usize = 6 * 1024 * 1024;
-            if !image.starts_with("data:image/") || image.len() > MAX_IMAGE_DATA_URL_BYTES {
-                return Err("image payload is invalid or too large".to_string());
+            if !image.starts_with("data:image/") || image.len() > MAX_WS_IMAGE_DATA_URL_BYTES {
+                return Err("image payload is invalid or too large (max 512KB)".to_string());
             }
         }
 
@@ -345,9 +346,8 @@ impl ChatWsSession {
         }
 
         if let Some(image) = &normalized_image_data_url {
-            const MAX_IMAGE_DATA_URL_BYTES: usize = 6 * 1024 * 1024;
-            if !image.starts_with("data:image/") || image.len() > MAX_IMAGE_DATA_URL_BYTES {
-                return Err("image payload is invalid or too large".to_string());
+            if !image.starts_with("data:image/") || image.len() > MAX_WS_IMAGE_DATA_URL_BYTES {
+                return Err("image payload is invalid or too large (max 512KB)".to_string());
             }
         }
 
