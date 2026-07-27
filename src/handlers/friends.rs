@@ -62,12 +62,40 @@ async fn resolve_username_by_email(
     Ok(normalized)
 }
 
-fn sorted_pair(left: &str, right: &str) -> (String, String) {
+pub fn sorted_friend_pair(left: &str, right: &str) -> (String, String) {
     if left <= right {
         (left.to_string(), right.to_string())
     } else {
         (right.to_string(), left.to_string())
     }
+}
+
+/// Returns true only when an Accepted friendship exists between the two usernames.
+pub fn friendship_status_allows_dm(status: Option<&FriendshipStatus>) -> bool {
+    matches!(status, Some(FriendshipStatus::Accepted))
+}
+
+/// Returns true only when an Accepted friendship exists between the two usernames.
+pub async fn are_accepted_friends(
+    db: &mongodb::Database,
+    username_a: &str,
+    username_b: &str,
+) -> Result<bool, String> {
+    let a = normalize_identity(username_a);
+    let b = normalize_identity(username_b);
+    if a.is_empty() || b.is_empty() || a == b {
+        return Ok(false);
+    }
+
+    let (user_a, user_b) = sorted_friend_pair(&a, &b);
+    let friendships_col = db.collection::<Friendship>("friendships");
+
+    let found = friendships_col
+        .find_one(doc! { "user_a": &user_a, "user_b": &user_b }, None)
+        .await
+        .map_err(|e| format!("failed to check friendship: {e}"))?;
+
+    Ok(friendship_status_allows_dm(found.as_ref().map(|item| &item.status)))
 }
 
 pub async fn build_friend_snapshot(db: &mongodb::Database, username: &str) -> Result<FriendSnapshot, mongodb::error::Error> {
@@ -191,7 +219,7 @@ pub async fn send_friend_request(
         return HttpResponse::NotFound().body("target user not found");
     }
 
-    let (user_a, user_b) = sorted_pair(&from_username, &to_username);
+    let (user_a, user_b) = sorted_friend_pair(&from_username, &to_username);
     let friendships_col = data.db.collection::<Friendship>("friendships");
 
     let existing = match friendships_col
@@ -262,7 +290,7 @@ pub async fn accept_friend_request(
         return HttpResponse::BadRequest().body("cannot accept self request");
     }
 
-    let (user_a, user_b) = sorted_pair(&current_username, &from_username);
+    let (user_a, user_b) = sorted_friend_pair(&current_username, &from_username);
     let friendships_col = data.db.collection::<Friendship>("friendships");
 
     let existing = match friendships_col
@@ -333,7 +361,7 @@ pub async fn remove_friend(
         return HttpResponse::BadRequest().body("cannot remove self");
     }
 
-    let (user_a, user_b) = sorted_pair(&current_username, &target_username);
+    let (user_a, user_b) = sorted_friend_pair(&current_username, &target_username);
     let friendships_col = data.db.collection::<Friendship>("friendships");
 
     match friendships_col
@@ -345,5 +373,30 @@ pub async fn remove_friend(
             "error": "Database error",
             "message": e.to_string()
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{friendship_status_allows_dm, sorted_friend_pair};
+    use crate::models::FriendshipStatus;
+
+    #[test]
+    fn sorted_friend_pair_is_order_independent() {
+        assert_eq!(
+            sorted_friend_pair("bob", "alice"),
+            ("alice".to_string(), "bob".to_string())
+        );
+        assert_eq!(
+            sorted_friend_pair("alice", "bob"),
+            ("alice".to_string(), "bob".to_string())
+        );
+    }
+
+    #[test]
+    fn friendship_status_allows_dm_only_for_accepted() {
+        assert!(friendship_status_allows_dm(Some(&FriendshipStatus::Accepted)));
+        assert!(!friendship_status_allows_dm(Some(&FriendshipStatus::Pending)));
+        assert!(!friendship_status_allows_dm(None));
     }
 }

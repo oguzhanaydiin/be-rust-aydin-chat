@@ -5,9 +5,8 @@ use mongodb::bson::{doc, oid::ObjectId, to_bson, DateTime as BsonDateTime};
 use crate::app_state::AppState;
 use crate::auth::{verify_token, AuthClaims};
 use crate::models::{
-    AddGroupMemberRequest, ChatGroup, CreateGroupRequest, Friendship, FriendshipStatus,
-    GroupDetailResponse, GroupMember, GroupMemberResponse, GroupRole, GroupSummaryResponse,
-    UpdateGroupMemberPermissionsRequest, User,
+    AddGroupMemberRequest, ChatGroup, CreateGroupRequest, GroupDetailResponse, GroupMember,
+    GroupMemberResponse, GroupRole, GroupSummaryResponse, UpdateGroupMemberPermissionsRequest, User,
 };
 
 fn verify_request_claims(data: &web::Data<AppState>, req: &HttpRequest) -> Result<AuthClaims, HttpResponse> {
@@ -33,14 +32,6 @@ fn verify_request_claims(data: &web::Data<AppState>, req: &HttpRequest) -> Resul
 
 fn normalize_identity(value: &str) -> String {
     value.trim().to_lowercase()
-}
-
-fn sorted_pair(left: &str, right: &str) -> (String, String) {
-    if left <= right {
-        (left.to_string(), right.to_string())
-    } else {
-        (right.to_string(), left.to_string())
-    }
 }
 
 async fn resolve_username_by_email(
@@ -74,20 +65,14 @@ async fn is_accepted_friend(
     username_a: &str,
     username_b: &str,
 ) -> Result<bool, HttpResponse> {
-    let (user_a, user_b) = sorted_pair(username_a, username_b);
-    let friendships_col = db.collection::<Friendship>("friendships");
-
-    let found = friendships_col
-        .find_one(doc! { "user_a": &user_a, "user_b": &user_b }, None)
+    crate::handlers::friends::are_accepted_friends(db, username_a, username_b)
         .await
-        .map_err(|e| {
+        .map_err(|message| {
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Database error",
-                "message": e.to_string()
+                "message": message
             }))
-        })?;
-
-    Ok(matches!(found.map(|item| item.status), Some(FriendshipStatus::Accepted)))
+        })
 }
 
 async fn ensure_user_exists(db: &mongodb::Database, username: &str) -> Result<(), HttpResponse> {

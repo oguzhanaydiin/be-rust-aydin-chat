@@ -222,6 +222,37 @@ impl ChatWsSession {
         let tx = self.out_tx.clone();
 
         tokio::spawn(async move {
+            let are_friends = match crate::handlers::friends::are_accepted_friends(
+                &state.db,
+                &from_username,
+                &normalized_to,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(message) => {
+                    if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                        message,
+                        client_message_id,
+                        message_id: None,
+                    }) {
+                        let _ = tx.send(payload);
+                    }
+                    return;
+                }
+            };
+
+            if !are_friends {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                    message: "you can only message accepted friends".to_string(),
+                    client_message_id,
+                    message_id: None,
+                }) {
+                    let _ = tx.send(payload);
+                }
+                return;
+            }
+
             let message = PendingMessage {
                 id: generate_id(),
                 from_username,
@@ -299,6 +330,28 @@ impl ChatWsSession {
         let state = self.state.clone();
 
         tokio::spawn(async move {
+            let are_friends = match crate::handlers::friends::are_accepted_friends(
+                &state.db,
+                &by_username,
+                &normalized_to,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(_) => false,
+            };
+
+            if !are_friends {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                    message: "you can only react on chats with accepted friends".to_string(),
+                    client_message_id: None,
+                    message_id: Some(normalized_message_id),
+                }) {
+                    let _ = state.dispatch_to_user(&by_username, &payload).await;
+                }
+                return;
+            }
+
             let reactions = state
                 .toggle_message_reaction(&normalized_message_id, &normalized_reaction, &by_username)
                 .await;
