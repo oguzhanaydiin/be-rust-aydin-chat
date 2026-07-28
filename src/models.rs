@@ -19,7 +19,8 @@ pub struct EmailOtpRecord {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
     pub email: String,
-    pub otp: String,
+    /// SHA-256 hex of `secret|email|otp` — never store plaintext codes.
+    pub otp_hash: String,
     pub expires_at: BsonDateTime,
     pub created_at: BsonDateTime,
     #[serde(default)]

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
 use crate::models::{GroupPendingMessage, PendingMessage};
+use crate::otp_limit::OtpRateLimiter;
 
 #[derive(Clone)]
 pub struct UserConnection {
@@ -14,6 +15,7 @@ pub struct AppState {
     pub db: mongodb::Database,
     pub jwt_secret: String,
     pub jwt_ttl_secs: u64,
+    pub otp_rate_limiter: RwLock<OtpRateLimiter>,
     pub mailboxes: RwLock<HashMap<String, Vec<PendingMessage>>>,
     pub group_mailboxes: RwLock<HashMap<String, Vec<GroupPendingMessage>>>,
     pub message_reactions: RwLock<HashMap<String, HashMap<String, Vec<String>>>>,

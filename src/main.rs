@@ -29,6 +29,7 @@ async fn main() -> std::io::Result<()> {
         db: db_instance,
         jwt_secret,
         jwt_ttl_secs,
+        otp_rate_limiter: RwLock::new(chat_api::otp_limit::OtpRateLimiter::new()),
         mailboxes: RwLock::new(HashMap::new()),
         group_mailboxes: RwLock::new(HashMap::new()),
         message_reactions: RwLock::new(HashMap::new()),

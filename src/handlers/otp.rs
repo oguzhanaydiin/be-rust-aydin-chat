@@ -11,6 +11,7 @@ use crate::models::{
     AuthSessionResponse, EmailOtpRecord, SendEmailOtpRequest, SendEmailOtpResponse,
     ValidateEmailOtpRequest, User,
 };
+use crate::otp_hash::{hash_otp, otp_hash_matches};
 
 fn generate_6_digit_otp() -> String {
     let mut rng = rand::thread_rng();
@@ -83,7 +84,16 @@ pub async fn send_email_otp(
         return HttpResponse::BadRequest().body("email cannot be empty");
     }
 
+    {
+        let mut limiter = data.otp_rate_limiter.write().await;
+        if limiter.check_and_record_send(&email).is_err() {
+            return HttpResponse::TooManyRequests()
+                .body("Too many OTP requests. Please try again later.");
+        }
+    }
+
     let otp = generate_6_digit_otp();
+    let otp_hash = hash_otp(&data.jwt_secret, &email, &otp);
     let ttl_seconds: i64 = 300;
     let now = BsonDateTime::now();
     let expires_at = BsonDateTime::from_system_time(
@@ -103,11 +113,12 @@ pub async fn send_email_otp(
     let update = doc! {
         "$set": {
             "email": &email,
-            "otp": &otp,
+            "otp_hash": &otp_hash,
             "expires_at": expires_at,
             "created_at": now,
             "is_used": false,
-        }
+        },
+        "$unset": { "otp": "" }
     };
 
     match otp_col
@@ -148,6 +159,14 @@ pub async fn validate_email_otp(
         return HttpResponse::BadRequest().body("email cannot be empty");
     }
 
+    {
+        let mut limiter = data.otp_rate_limiter.write().await;
+        if limiter.check_and_record_validate(&email).is_err() {
+            return HttpResponse::TooManyRequests()
+                .body("Too many OTP attempts. Please try again later.");
+        }
+    }
+
     let otp_col = data.db.collection::<EmailOtpRecord>("email_otps");
     let filter = doc! { "email": &email };
 
@@ -166,7 +185,8 @@ pub async fn validate_email_otp(
     };
 
     let is_not_expired = otp_record.expires_at > BsonDateTime::now();
-    let is_code_match = otp_record.otp == req.otp;
+    let is_code_match =
+        otp_hash_matches(&data.jwt_secret, &email, &req.otp, &otp_record.otp_hash);
     let is_valid = !otp_record.is_used && is_not_expired && is_code_match;
 
     if is_valid {
