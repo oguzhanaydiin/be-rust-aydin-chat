@@ -16,8 +16,8 @@ use crate::models::{GroupMember, GroupPendingMessage, PendingMessage, User, WsCl
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Small images only (~512KB data URL). Durable history lives on clients.
-const MAX_WS_IMAGE_DATA_URL_BYTES: usize = 512 * 1024;
-const MAX_WS_FRAME_SIZE: usize = 768 * 1024;
+pub const MAX_WS_IMAGE_DATA_URL_BYTES: usize = 512 * 1024;
+pub const MAX_WS_FRAME_SIZE: usize = 768 * 1024;
 
 pub async fn ws_index(
     req: HttpRequest,
@@ -150,25 +150,55 @@ impl ChatWsSession {
 
             let inbox = state.get_inbox(&normalized).await;
 
-            // Notify senders of queued messages that their message is now delivered
-            for msg in &inbox {
-                if let Ok(payload) = serde_json::to_string(&WsServerEvent::MessageDelivered {
+            // Deliver one NewMessage per pending item so ~512KB images never
+            // blow a single Inbox frame past MAX_WS_FRAME_SIZE. Notify senders
+            // only after the recipient connection accepted the payload.
+            for msg in inbox {
+                let Ok(payload) = serde_json::to_string(&WsServerEvent::NewMessage {
+                    message: msg.clone(),
+                }) else {
+                    continue;
+                };
+                if payload.len() > MAX_WS_FRAME_SIZE {
+                    continue;
+                }
+                if tx.send(payload).is_err() {
+                    break;
+                }
+                if let Ok(delivered_payload) = serde_json::to_string(&WsServerEvent::MessageDelivered {
                     message_id: msg.id.clone(),
                     client_message_id: None,
                 }) {
-                    let _ = state.dispatch_to_user(&msg.from_username, &payload).await;
+                    let _ = state
+                        .dispatch_to_user(&msg.from_username, &delivered_payload)
+                        .await;
                 }
             }
 
-            if let Ok(payload) = serde_json::to_string(&WsServerEvent::Inbox { messages: inbox }) {
-                let _ = tx.send(payload);
-            }
-
             let group_inbox = state.get_group_inbox(&normalized).await;
-            if let Ok(payload) = serde_json::to_string(&WsServerEvent::GroupInbox {
-                messages: group_inbox,
-            }) {
-                let _ = tx.send(payload);
+            for msg in group_inbox {
+                let Ok(payload) = serde_json::to_string(&WsServerEvent::NewGroupMessage {
+                    message: msg.clone(),
+                }) else {
+                    continue;
+                };
+                if payload.len() > MAX_WS_FRAME_SIZE {
+                    continue;
+                }
+                if tx.send(payload).is_err() {
+                    break;
+                }
+                if let Ok(delivered_payload) =
+                    serde_json::to_string(&WsServerEvent::GroupMessageDelivered {
+                        message_id: msg.id.clone(),
+                        group_id: msg.group_id.clone(),
+                        client_message_id: None,
+                    })
+                {
+                    let _ = state
+                        .dispatch_to_user(&msg.from_username, &delivered_payload)
+                        .await;
+                }
             }
 
             let online_users = state.online_user_ids().await;
