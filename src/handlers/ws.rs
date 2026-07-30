@@ -293,7 +293,16 @@ impl ChatWsSession {
                 created_at: Utc::now(),
             };
 
-            state.queue_message(message.clone()).await;
+            if let Err(err) = state.queue_message(message.clone()).await {
+                if let Ok(payload) = serde_json::to_string(&WsServerEvent::Error {
+                    message: err,
+                    client_message_id,
+                    message_id: Some(message.id),
+                }) {
+                    let _ = tx.send(payload);
+                }
+                return;
+            }
 
             let delivered = if let Ok(payload) = serde_json::to_string(&WsServerEvent::NewMessage {
                 message: message.clone(),

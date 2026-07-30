@@ -9,7 +9,7 @@ use chat_api::otp_limit::OtpRateLimiter;
 use chrono::Utc;
 use mongodb::{
     options::{ClientOptions, ServerAddress},
-    Client,
+    Client, Database,
 };
 use tokio::sync::{mpsc::unbounded_channel, RwLock};
 
@@ -27,6 +27,7 @@ fn test_app_state(database_name: &str) -> AppState {
         db: client.database(database_name),
         jwt_secret: "test-secret".to_string(),
         jwt_ttl_secs: DEFAULT_JWT_TTL_SECONDS,
+        persist_dms: false,
         otp_rate_limiter: RwLock::new(OtpRateLimiter::new()),
         mailboxes: RwLock::new(HashMap::new()),
         group_mailboxes: RwLock::new(HashMap::new()),
@@ -35,6 +36,30 @@ fn test_app_state(database_name: &str) -> AppState {
         group_message_members: RwLock::new(HashMap::new()),
         online_users: RwLock::new(HashMap::new()),
     }
+}
+
+fn durable_app_state(db: Database) -> AppState {
+    AppState {
+        db,
+        jwt_secret: "test-secret".to_string(),
+        jwt_ttl_secs: DEFAULT_JWT_TTL_SECONDS,
+        persist_dms: true,
+        otp_rate_limiter: RwLock::new(OtpRateLimiter::new()),
+        mailboxes: RwLock::new(HashMap::new()),
+        group_mailboxes: RwLock::new(HashMap::new()),
+        message_reactions: RwLock::new(HashMap::new()),
+        group_message_reactions: RwLock::new(HashMap::new()),
+        group_message_members: RwLock::new(HashMap::new()),
+        online_users: RwLock::new(HashMap::new()),
+    }
+}
+
+async fn test_mongo_db(database_name: &str) -> Option<Database> {
+    let uri = std::env::var("TEST_MONGO_URI").ok()?;
+    let client = Client::with_uri_str(&uri).await.ok()?;
+    let db = client.database(database_name);
+    let _ = db.drop(None).await;
+    Some(db)
 }
 
 fn pending(id: &str, from: &str, to: &str, image: Option<String>) -> PendingMessage {
@@ -54,14 +79,63 @@ fn pending(id: &str, from: &str, to: &str, image: Option<String>) -> PendingMess
 }
 
 #[tokio::test]
+async fn durable_mailbox_survives_rehydrate_like_restart() {
+    let Some(db) = test_mongo_db("aydin_chat_test_durable_mailbox").await else {
+        eprintln!("skip durable_mailbox_survives_rehydrate_like_restart: set TEST_MONGO_URI");
+        return;
+    };
+
+    let writer = durable_app_state(db.clone());
+    writer
+        .queue_message(pending("m1", "alice", "bob", None))
+        .await
+        .expect("persist m1");
+    writer
+        .queue_message(pending("m2", "alice", "bob", None))
+        .await
+        .expect("persist m2");
+    writer
+        .toggle_message_reaction("m1", "heart", "bob")
+        .await;
+
+    // Fresh process: empty memory, hydrate from Mongo.
+    let restarted = durable_app_state(db.clone());
+    let hydrated = restarted
+        .hydrate_pending_dms()
+        .await
+        .expect("hydrate after restart");
+    assert_eq!(hydrated, 2);
+
+    let inbox = restarted.get_inbox("bob").await;
+    assert_eq!(inbox.len(), 2);
+    assert_eq!(inbox[0].id, "m1");
+    assert_eq!(
+        inbox[0].reactions.get("heart"),
+        Some(&vec!["bob".to_string()])
+    );
+
+    let removed = restarted.ack_messages("bob", &["m1".to_string()]).await;
+    assert_eq!(removed, 1);
+
+    let after_ack = durable_app_state(db);
+    let hydrated_again = after_ack.hydrate_pending_dms().await.expect("hydrate");
+    assert_eq!(hydrated_again, 1);
+    let remaining = after_ack.get_inbox("bob").await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, "m2");
+}
+
+#[tokio::test]
 async fn queue_inbox_ack_removes_only_acked_ids() {
     let state = test_app_state("mailbox_ack");
     state
         .queue_message(pending("m1", "alice", "bob", None))
-        .await;
+        .await
+        .expect("queue m1");
     state
         .queue_message(pending("m2", "alice", "bob", None))
-        .await;
+        .await
+        .expect("queue m2");
 
     let inbox = state.get_inbox("bob").await;
     assert_eq!(inbox.len(), 2);
@@ -79,7 +153,8 @@ async fn dispatch_to_offline_user_returns_zero_and_keeps_mailbox() {
     let state = test_app_state("mailbox_offline");
     state
         .queue_message(pending("m1", "alice", "bob", None))
-        .await;
+        .await
+        .expect("queue m1");
 
     let delivered = state.dispatch_to_user("bob", "payload").await;
     assert_eq!(delivered, 0);

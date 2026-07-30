@@ -25,10 +25,11 @@ async fn main() -> std::io::Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .unwrap_or(DEFAULT_JWT_TTL_SECONDS);
-    let app_state = web::Data::new(AppState {
+    let app_state = AppState {
         db: db_instance,
         jwt_secret,
         jwt_ttl_secs,
+        persist_dms: true,
         otp_rate_limiter: RwLock::new(chat_api::otp_limit::OtpRateLimiter::new()),
         mailboxes: RwLock::new(HashMap::new()),
         group_mailboxes: RwLock::new(HashMap::new()),
@@ -36,8 +37,20 @@ async fn main() -> std::io::Result<()> {
         group_message_reactions: RwLock::new(HashMap::new()),
         group_message_members: RwLock::new(HashMap::new()),
         online_users: RwLock::new(HashMap::new()),
-    });
-    
+    };
+
+    match app_state.hydrate_pending_dms().await {
+        Ok(count) => println!("Hydrated {count} pending DM(s) from MongoDB."),
+        Err(err) => {
+            return Err(IoError::new(
+                ErrorKind::Other,
+                format!("failed to hydrate pending DMs: {err}"),
+            ));
+        }
+    }
+
+    let app_state = web::Data::new(app_state);
+
     println!("Starting server on port 8080...");
 
     HttpServer::new(move || {

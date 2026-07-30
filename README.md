@@ -5,7 +5,7 @@ Rust backend for Aydin Chat (OTP auth + WebSocket relay).
 Chat design (Signal-like):
 - Message history is client-owned.
 - Server relays messages in real time via WebSocket.
-- Offline messages stay in an **in-memory** mailbox until client ack (lost on restart).
+- Offline DMs stay in a Mongo-backed mailbox (`pending_dms`) until client ack (survives restart).
 - OTP + users live in MongoDB; OTPs are stored hashed.
 
 ## How to run
@@ -60,7 +60,8 @@ With `APP_ENV=dev`, `POST /otp/send` also returns the OTP in the JSON body (hand
 
 ## Notes
 
-- Chat message history is not stored in MongoDB.
-- In-memory offline queue is a V0 contract (not durable across restart).
+- Chat message history is not stored in MongoDB (only undelivered DMs until ack).
+- DM offline queue is durable in `pending_dms` and hydrated on boot; group offline queues stay in-memory.
 - OTP plaintext is never stored; rate limits apply on send/validate.
 - WS images are capped (~512KB); reconnect delivers pending messages one frame at a time.
+- Durable mailbox integration test: set `TEST_MONGO_URI` then `cargo test durable_mailbox`.
