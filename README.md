@@ -1,126 +1,66 @@
-dotenv is for reading .env file
 # be-rust-aydin-chat
 
-Rust backend for chat + OTP.
+Rust backend for Aydin Chat (OTP auth + WebSocket relay).
 
-Chat design goal is Signal-like:
+Chat design (Signal-like):
 - Message history is client-owned.
 - Server relays messages in real time via WebSocket.
-- Server keeps temporary offline messages in memory until client ack.
-- OTP data is stored in MongoDB.
+- Offline messages stay in an **in-memory** mailbox until client ack (lost on restart).
+- OTP + users live in MongoDB; OTPs are stored hashed.
 
-## Project Structure
+## How to run
 
-```text
-src/
-	main.rs
-	app_state.rs
-	db.rs
-	models.rs
-	routes.rs
-	handlers/
-		mod.rs
-		health.rs
-		otp.rs
-		users.rs
-		ws.rs
+1. MongoDB running and reachable.
+2. Create `.env` in this repo:
+
+```env
+MONGO_URI=mongodb://127.0.0.1:27017/aydin_chat
+JWT_SECRET=change-me
+RESEND_API_KEY=...
+RESEND_FROM_EMAIL=...
+APP_ENV=dev
 ```
 
-File responsibilities:
+Optional: `JWT_TTL_SECONDS` (default 7 days).
 
-- `src/main.rs`
-	- Starts Actix server (`127.0.0.1:8080`).
-	- Initializes MongoDB connection.
-	- Builds shared `AppState` (Mongo DB handle + in-memory mailboxes + online users).
-	- Registers all routes.
+3. Start the API:
 
-- `src/app_state.rs`
-	- Global runtime state shared across handlers.
-	- Holds in-memory chat mailbox per user.
-	- Holds online WebSocket connections per user.
-	- Provides helper methods:
-		- register/unregister socket connection
-		- queue message
-		- read inbox
-		- ack messages
-		- dispatch to online user(s)
-		- broadcast online-user list
+```bash
+cargo run
+```
 
-- `src/db.rs`
-	- MongoDB initialization and index setup.
-	- Currently used for OTP persistence (`email_otps` collection).
+Listens on `http://127.0.0.1:8080` and `ws://127.0.0.1:8080/ws`.
 
-- `src/models.rs`
-	- Request/response DTOs and shared models.
-	- OTP models (`SendEmailOtpRequest`, `ValidateEmailOtpRequest`, `AuthSessionResponse`, etc.).
-	- User models (`User`, `SaveUsernameRequest`, `SaveUsernameResponse`).
-	- Chat models (`PendingMessage` - used internally by WebSocket handlers).
-	- WebSocket event enums (`WsClientEvent`, `WsServerEvent`).
+4. Check health: `GET http://127.0.0.1:8080/health`
 
-- `src/routes.rs`
-	- Central route map for HTTP and WebSocket endpoints.
+5. Pair with the frontend (`fe-aydin-chat`):
 
-- `src/handlers/health.rs`
-	- Health check endpoint.
+```bash
+npm install
+npm run dev
+```
 
-- `src/handlers/otp.rs`
-	- OTP generation, storage, validation.
-	- Uses MongoDB collection `email_otps`.
+Defaults: `NEXT_PUBLIC_API_URL=http://127.0.0.1:8080`, `NEXT_PUBLIC_WS_URL=ws://127.0.0.1:8080/ws`.
 
-- `src/handlers/users.rs`
-	- User profile management (username).
-	- Uses MongoDB collection `users`.
+With `APP_ENV=dev`, `POST /otp/send` also returns the OTP in the JSON body (handy for local login without opening mail).
 
-- `src/handlers/ws.rs`
-	- WebSocket session lifecycle and event handling.
-	- Handles register/send_message/ack/get_online_users events.
-	- Manages in-memory message queue for offline delivery.
-	- Delivers realtime messages and pushes inbox/online updates.
+## Try a chat
 
-- `src/handlers/mod.rs`
-	- Re-exports handler modules.
+1. Two browsers (or normal + incognito).
+2. Login with two emails via OTP; set usernames.
+3. Send friend request → accept.
+4. DM text / small image; try offline peer then reconnect.
 
-## Routes
-
-HTTP routes:
+## Routes (main)
 
 - `GET /health`
-	- Health check endpoint.
-
-- `PUT /users/username`
-	- Save/update username for authenticated user.
-	- Requires Bearer token in Authorization header.
-	- Validates username uniqueness.
-
-- `POST /otp/send`
-	- Creates OTP and stores it in MongoDB.
-	- Returns OTP in dev environment for testing.
-
-- `POST /otp/validate`
-	- Validates OTP and returns authentication token.
-	- Returns user profile including username if set.
-
-WebSocket route:
-
-- `GET /ws`
-	- WebSocket endpoint for realtime chat events.
-	- Handles: register, send_message, ack, get_online_users events.
-
-## Dependencies (Cargo.toml)
-
-- `actix-web`: HTTP server and routing
-- `actix`, `actix-web-actors`: WebSocket actor/session handling
-- `mongodb`: OTP data persistence
-- `serde`, `serde_json`: serialization/deserialization
-- `tokio`, `tokio-stream`: async runtime and stream integration
-- `futures`: async utilities
-- `dotenv`: environment variable loading
-- `chrono`: UTC timestamp handling for chat messages
-- `rand`: OTP code generation
+- `POST /otp/send`, `POST /otp/validate`
+- `PUT /users/username`, `GET /users/me`, friends + groups HTTP APIs
+- `GET /ws` — register, send_message, ack, reactions, online users
 
 ## Notes
 
-- Chat messages are not persisted in MongoDB.
-- Offline chat queue is currently in-memory (lost on server restart).
-- For stronger delivery guarantees, consider Redis for temporary undelivered messages.
-- OTP is returned in `POST /otp/send` response only when `APP_ENV` is set to `dev`, `development`, or `local`.
+- Chat message history is not stored in MongoDB.
+- In-memory offline queue is a V0 contract (not durable across restart).
+- OTP plaintext is never stored; rate limits apply on send/validate.
+- WS images are capped (~512KB); reconnect delivers pending messages one frame at a time.
