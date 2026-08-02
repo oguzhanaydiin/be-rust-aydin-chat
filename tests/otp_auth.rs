@@ -29,6 +29,7 @@ fn test_app_state(database_name: &str) -> AppState {
         db: client.database(database_name),
         jwt_secret: "test-secret".to_string(),
         jwt_ttl_secs: DEFAULT_JWT_TTL_SECONDS,
+        persist_dms: false,
         otp_rate_limiter: RwLock::new(OtpRateLimiter::new()),
         mailboxes: RwLock::new(HashMap::new()),
         group_mailboxes: RwLock::new(HashMap::new()),

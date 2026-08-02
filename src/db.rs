@@ -89,7 +89,14 @@ impl MongoRepo {
             .create_index(group_member_by_user, None::<CreateIndexOptions>)
             .await;
 
-        
+        let pending_dms_col = self.db.collection::<Document>("pending_dms");
+        let pending_dm_inbox_index = IndexModel::builder()
+            .keys(doc! { "to_username": 1, "created_at": 1 })
+            .build();
+        let _ = pending_dms_col
+            .create_index(pending_dm_inbox_index, None::<CreateIndexOptions>)
+            .await;
+
         println!("MongoDB indexes checked.");
     }
 
