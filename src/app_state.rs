@@ -187,18 +187,27 @@ impl AppState {
             }
         }
 
-        let message_ids: std::collections::HashSet<&String> = message_ids.iter().collect();
+        let id_set: std::collections::HashSet<&String> = message_ids.iter().collect();
         let mut mailboxes = self.mailboxes.write().await;
-        let Some(messages) = mailboxes.get_mut(user_id) else {
-            return 0;
+        let removed = if let Some(messages) = mailboxes.get_mut(user_id) {
+            let before = messages.len();
+            messages.retain(|msg| !id_set.contains(&msg.id));
+            let removed = before.saturating_sub(messages.len());
+
+            if messages.is_empty() {
+                mailboxes.remove(user_id);
+            }
+
+            removed
+        } else {
+            0
         };
+        drop(mailboxes);
 
-        let before = messages.len();
-        messages.retain(|msg| !message_ids.contains(&msg.id));
-        let removed = before.saturating_sub(messages.len());
-
-        if messages.is_empty() {
-            mailboxes.remove(user_id);
+        // DM is single-recipient: once acked, reaction sidecars are orphaned.
+        let mut reactions = self.message_reactions.write().await;
+        for id in message_ids {
+            reactions.remove(id);
         }
 
         removed
@@ -246,15 +255,41 @@ impl AppState {
             return 0;
         }
 
-        let message_ids: std::collections::HashSet<&String> = message_ids.iter().collect();
+        let id_set: std::collections::HashSet<&String> = message_ids.iter().collect();
         let mut mailboxes = self.group_mailboxes.write().await;
-        let Some(messages) = mailboxes.get_mut(user_id) else {
-            return 0;
-        };
+        let removed = if let Some(messages) = mailboxes.get_mut(user_id) {
+            let before = messages.len();
+            messages.retain(|msg| !id_set.contains(&msg.id));
+            let removed = before.saturating_sub(messages.len());
 
-        let before = messages.len();
-        messages.retain(|msg| !message_ids.contains(&msg.id));
-        before.saturating_sub(messages.len())
+            if messages.is_empty() {
+                mailboxes.remove(user_id);
+            }
+
+            removed
+        } else {
+            0
+        };
+        drop(mailboxes);
+
+        // Drop member/reaction maps only when no recipient still has a pending copy.
+        let mut members = self.group_message_members.write().await;
+        let mut reactions = self.group_message_reactions.write().await;
+        for id in message_ids {
+            let fully_acked = match members.get_mut(id) {
+                Some(recipients) => {
+                    recipients.retain(|username| username != user_id);
+                    recipients.is_empty()
+                }
+                None => continue,
+            };
+            if fully_acked {
+                members.remove(id);
+                reactions.remove(id);
+            }
+        }
+
+        removed
     }
 
     pub async fn toggle_group_message_reaction(

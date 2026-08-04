@@ -4,7 +4,7 @@ use std::time::Duration;
 use chat_api::app_state::AppState;
 use chat_api::auth::DEFAULT_JWT_TTL_SECONDS;
 use chat_api::handlers::ws::{MAX_WS_FRAME_SIZE, MAX_WS_IMAGE_DATA_URL_BYTES};
-use chat_api::models::{PendingMessage, WsServerEvent};
+use chat_api::models::{GroupPendingMessage, PendingMessage, WsServerEvent};
 use chat_api::otp_limit::OtpRateLimiter;
 use chrono::Utc;
 use mongodb::{
@@ -146,6 +146,60 @@ async fn queue_inbox_ack_removes_only_acked_ids() {
     let remaining = state.get_inbox("bob").await;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, "m2");
+}
+
+#[tokio::test]
+async fn dm_ack_clears_message_reactions() {
+    let state = test_app_state("mailbox_ack_reactions");
+    state
+        .queue_message(pending("m1", "alice", "bob", None))
+        .await
+        .expect("queue m1");
+    state.toggle_message_reaction("m1", "heart", "bob").await;
+
+    assert!(state.message_reactions.read().await.contains_key("m1"));
+
+    let removed = state.ack_messages("bob", &["m1".to_string()]).await;
+    assert_eq!(removed, 1);
+    assert!(!state.message_reactions.read().await.contains_key("m1"));
+}
+
+fn group_pending(id: &str, group_id: &str, from: &str) -> GroupPendingMessage {
+    GroupPendingMessage {
+        id: id.to_string(),
+        group_id: group_id.to_string(),
+        from_username: from.to_string(),
+        text: "hello".to_string(),
+        image_data_url: None,
+        reactions: HashMap::new(),
+        created_at: Utc::now(),
+    }
+}
+
+#[tokio::test]
+async fn group_ack_clears_maps_only_when_all_recipients_ack() {
+    let state = test_app_state("mailbox_group_ack_maps");
+    let recipients = vec!["bob".to_string(), "carol".to_string()];
+    state
+        .queue_group_message(group_pending("g1", "group-1", "alice"), &recipients)
+        .await;
+    state
+        .toggle_group_message_reaction("g1", "thumbsup", "bob")
+        .await;
+
+    let removed_bob = state.ack_group_messages("bob", &["g1".to_string()]).await;
+    assert_eq!(removed_bob, 1);
+    assert!(state.group_message_members.read().await.contains_key("g1"));
+    assert!(state.group_message_reactions.read().await.contains_key("g1"));
+    assert_eq!(
+        state.group_message_recipients("g1").await,
+        vec!["carol".to_string()]
+    );
+
+    let removed_carol = state.ack_group_messages("carol", &["g1".to_string()]).await;
+    assert_eq!(removed_carol, 1);
+    assert!(!state.group_message_members.read().await.contains_key("g1"));
+    assert!(!state.group_message_reactions.read().await.contains_key("g1"));
 }
 
 #[tokio::test]
