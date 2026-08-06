@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// In-memory per-email / per-IP windows for OTP send / validate.
-/// Process-local only — restart clears all counters.
+/// Process-local only; restart clears all counters.
 #[derive(Debug, Default)]
 pub struct OtpRateLimiter {
     send_attempts: HashMap<String, Vec<Instant>>,

@@ -56,7 +56,7 @@ With `APP_ENV=dev`, `POST /otp/send` also returns the OTP in the JSON body (hand
 - `GET /health`
 - `POST /otp/send`, `POST /otp/validate`
 - `PUT /users/username`, `GET /users/me`, friends + groups HTTP APIs
-- `GET /ws` — register, send_message, ack, reactions, online users
+- `GET /ws` - register, send_message, ack, reactions, online users
 
 ## Notes
 
