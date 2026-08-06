@@ -43,17 +43,20 @@ fn test_app_state(database_name: &str) -> AppState {
 #[actix_web::test]
 async fn otp_send_rate_limit_returns_429_without_needing_mongo() {
     let app_state = web::Data::new(test_app_state("otp_send_rate_limit"));
-    let app = test::init_service(App::new().app_data(app_state).configure(routes::configure)).await;
-
-    for _ in 0..OtpRateLimiter::SEND_MAX {
-        let request = test::TestRequest::post()
-            .uri("/otp/send")
-            .set_json(serde_json::json!({ "email": "rate@example.com" }))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-        // Unreachable Mongo → 500 after the rate-limit check passes.
-        assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    // Send quota only records after successful Resend; seed successful sends here.
+    {
+        let mut limiter = app_state.otp_rate_limiter.write().await;
+        for _ in 0..OtpRateLimiter::SEND_MAX {
+            limiter.record_send("rate@example.com");
+        }
     }
+
+    let app = test::init_service(
+        App::new()
+            .app_data(app_state.clone())
+            .configure(routes::configure),
+    )
+    .await;
 
     let limited = test::TestRequest::post()
         .uri("/otp/send")
@@ -61,6 +64,34 @@ async fn otp_send_rate_limit_returns_429_without_needing_mongo() {
         .to_request();
     let response = test::call_service(&app, limited).await;
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[actix_web::test]
+async fn otp_send_failed_delivery_does_not_burn_quota() {
+    let app_state = web::Data::new(test_app_state("otp_send_no_burn_on_fail"));
+    let app = test::init_service(
+        App::new()
+            .app_data(app_state.clone())
+            .configure(routes::configure),
+    )
+    .await;
+
+    // Unreachable Mongo / failed Resend path must not consume send quota.
+    for _ in 0..(OtpRateLimiter::SEND_MAX + 2) {
+        let request = test::TestRequest::post()
+            .uri("/otp/send")
+            .set_json(serde_json::json!({ "email": "noburn@example.com" }))
+            .to_request();
+        let response = test::call_service(&app, request).await;
+        assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    assert!(app_state
+        .otp_rate_limiter
+        .write()
+        .await
+        .check_send("noburn@example.com")
+        .is_ok());
 }
 
 #[actix_web::test]

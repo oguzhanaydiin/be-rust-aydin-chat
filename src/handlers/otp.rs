@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use mongodb::bson::{doc, DateTime as BsonDateTime};
 use rand::Rng;
 use serde::Serialize;
@@ -12,6 +12,14 @@ use crate::models::{
     ValidateEmailOtpRequest, User,
 };
 use crate::otp_hash::{hash_otp, otp_hash_matches};
+
+fn client_ip(req: &HttpRequest) -> Option<String> {
+    req.connection_info()
+        .realip_remote_addr()
+        .map(str::trim)
+        .filter(|ip| !ip.is_empty())
+        .map(str::to_string)
+}
 
 fn generate_6_digit_otp() -> String {
     let mut rng = rand::thread_rng();
@@ -77,6 +85,7 @@ async fn send_otp_with_resend(email: &str, otp: &str) -> Result<(), String> {
 
 pub async fn send_email_otp(
     data: web::Data<AppState>,
+    http_req: HttpRequest,
     req: web::Json<SendEmailOtpRequest>,
 ) -> impl Responder {
     let email = req.email.trim().to_lowercase();
@@ -84,11 +93,18 @@ pub async fn send_email_otp(
         return HttpResponse::BadRequest().body("email cannot be empty");
     }
 
+    let ip = client_ip(&http_req);
     {
         let mut limiter = data.otp_rate_limiter.write().await;
-        if limiter.check_and_record_send(&email).is_err() {
+        if limiter.check_send(&email).is_err() {
             return HttpResponse::TooManyRequests()
                 .body("Too many OTP requests. Please try again later.");
+        }
+        if let Some(ip) = ip.as_deref() {
+            if limiter.check_send_ip(ip).is_err() {
+                return HttpResponse::TooManyRequests()
+                    .body("Too many OTP requests. Please try again later.");
+            }
         }
     }
 
@@ -131,7 +147,16 @@ pub async fn send_email_otp(
     {
         Ok(_) => {
             if send_otp_with_resend(&email, &otp).await.is_err() {
+                // Failed delivery must not burn send quota.
                 return HttpResponse::InternalServerError().body("failed to send OTP email");
+            }
+
+            {
+                let mut limiter = data.otp_rate_limiter.write().await;
+                limiter.record_send(&email);
+                if let Some(ip) = ip.as_deref() {
+                    limiter.record_send_ip(ip);
+                }
             }
 
             let response_otp = if should_include_otp_in_response() {
@@ -152,6 +177,7 @@ pub async fn send_email_otp(
 
 pub async fn validate_email_otp(
     data: web::Data<AppState>,
+    http_req: HttpRequest,
     req: web::Json<ValidateEmailOtpRequest>,
 ) -> impl Responder {
     let email = req.email.trim().to_lowercase();
@@ -159,11 +185,18 @@ pub async fn validate_email_otp(
         return HttpResponse::BadRequest().body("email cannot be empty");
     }
 
+    let ip = client_ip(&http_req);
     {
         let mut limiter = data.otp_rate_limiter.write().await;
         if limiter.check_and_record_validate(&email).is_err() {
             return HttpResponse::TooManyRequests()
                 .body("Too many OTP attempts. Please try again later.");
+        }
+        if let Some(ip) = ip.as_deref() {
+            if limiter.check_and_record_validate_ip(ip).is_err() {
+                return HttpResponse::TooManyRequests()
+                    .body("Too many OTP attempts. Please try again later.");
+            }
         }
     }
 

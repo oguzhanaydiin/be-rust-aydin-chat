@@ -62,6 +62,6 @@ With `APP_ENV=dev`, `POST /otp/send` also returns the OTP in the JSON body (hand
 
 - Chat message history is not stored in MongoDB (only undelivered DMs until ack).
 - DM offline queue is durable in `pending_dms` and hydrated on boot; group offline queues stay in-memory.
-- OTP plaintext is never stored; rate limits apply on send/validate.
+- OTP plaintext is never stored. Send limit: 3/email/15m (counted only after a successful email send) plus ~10/IP/15m; validate: 8/email/15m plus ~20/IP/15m. Limits are in-memory only and reset on process restart.
 - WS images are capped (~512KB); reconnect delivers pending messages one frame at a time.
 - Durable mailbox integration test: set `TEST_MONGO_URI` then `cargo test durable_mailbox`.
