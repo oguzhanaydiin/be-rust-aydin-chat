@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn otp_to_username_identity_uses_same_email_claims() {
         // Contract: validate OTP issues a JWT for the email; username setup
-        // keys off that email — hashes must be email-scoped so codes cannot
+        // keys off that email; hashes must be email-scoped so codes cannot
         // be reused across accounts if the DB leaks.
         let email = "alice@example.com";
         let hash = hash_otp("jwt-secret", email, "654321");
